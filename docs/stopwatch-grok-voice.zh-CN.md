@@ -50,4 +50,14 @@ ctest --test-dir build-conversation-host --output-on-failure
 
 本次云环境已通过 3 项主机测试（ASan + UBSan）：原有小智控制分发、Grok/OpenAI 会话和独立密钥配置、使用模拟 WebSocket/RTOS 的真实语音客户端。客户端测试覆盖会话确认、μ-law 音频解码、取消后的旧音频/文本/工具过滤、取消后继续对话、已完成回复不重复取消、错误事件及重新连接。模拟测试不验证真实网络、板载音频或触摸硬件。两个设置页也通过 JavaScript 语法检查。
 
-**完整固件尚未编译成功，未提供可刷写二进制。** 官方 Docker 镜像因解压空间不足安装失败；随后完成本地 ESP32-S3 工具链安装，但 ESP-IDF Python 环境所需 `https://dl.espressif.com/dl/esp-idf/espidf.constraints.v5.5.txt` 被当前网络策略以 403 拦截。需在可获取 Espressif 构建依赖的环境中继续完整构建，并完成上述实机测试。
+代码版本 `9954f5a` 已通过 [StopWatch C152 完整构建](https://github.com/Akiraiuu/groki-bot/actions/runs/39054131633)，可[下载该版本开发固件](https://github.com/Akiraiuu/groki-bot/actions/runs/39054131633/artifacts/12108389841)（需登录 GitHub）。后续构建结果请查看 [PR #1](https://github.com/Akiraiuu/groki-bot/pull/1) 的 **StopWatch development firmware** 检查。测试通过或源码上传本身不代表固件可用；只有该构建成功并上传 Artifacts 后才有对应开发固件，仍需完成实机验证。
+
+构建产物下载后先解压：
+
+| 文件 | 用途 |
+|---|---|
+| `firmware-stopwatch-grok.bin` | 含引导程序、分区表和应用的合并镜像，USB 烧录起始地址为 `0x0`，仅适用于 C152 |
+| `stackchan_idf.bin` | 应用镜像；已运行兼容 StopWatch 固件时，用于本地 OTA 上传 |
+| `flash_args` / `flasher_args.json` | 分区烧录地址及参数；分别烧录各分区时使用，不能把应用镜像当合并镜像使用 |
+
+这些文件属于开发固件。完整编译证明构建和分区大小检查通过，不证明设备、麦克风、播放、联网和 xAI 账号已联调成功。

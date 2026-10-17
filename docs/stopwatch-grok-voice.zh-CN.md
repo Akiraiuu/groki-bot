@@ -1,5 +1,15 @@
 # StopWatch 直连 Grok Voice（二次开发）
 
+## 当前阶段：先验证已发布的 StopWatch AI Assistant
+
+目标已明确为完整沿用 xAI Console 中发布的 **StopWatch AI Assistant**，通过 `agent_id` 接入，由云端签发短期令牌，长期 xAI API Key 不进入设备固件、NVS 或网页设置项。
+
+**现有 `grok-dev-b01942db` 固件是早期通用 Grok 原型，不满足该目标**：它没有 `agent_id` / 云端令牌接入，会发送本地人设、音色和工具配置，而且仍是半双工。请先使用 [Windows 电脑端验证工具](../tools/stopwatch-agent/README.zh-CN.md) 检查保存 Agent 与短期令牌的兼容性；不需要重新刷机，也不需要再向设备填长期 Key。
+
+目前没有真实账号的程序化验证结果，不声称 P1 或独立语音通过。设备设置页可打开，但白点显示现象、音频、恢复到原厂固件仍待实机验证。继续刷写前应备妥与 C152 对应的恢复固件及恢复步骤。以下保留为**早期原型的历史说明**，不作为最终配置流程。
+
+## 早期原型
+
 这条开发分支基于 `JosssphZhou/groki-bot`，目标板为 **M5Stack StopWatch C152**。沿用上游的表情、口型、设置、OTA、重连及触摸屏交互，新增 xAI Grok Voice 服务商。首次刷机、配置完成后，设备通过 Wi-Fi 直接连接 xAI，无须常开电脑、Python 网关或小智服务器。
 
 ## 配置

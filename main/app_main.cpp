@@ -778,6 +778,9 @@ extern "C" void app_main()
         }
         ESP_LOGI(kTag, "provider=Gemini Live, key=%s",
                  api_key[0] ? "set" : "empty");
+    } else if (cfg.provider == stackchan::config::Provider::Grok) {
+        api_key = cfg.xai_api_key.c_str();
+        ESP_LOGI(kTag, "provider=Grok Voice, key=%s", api_key[0] ? "set" : "empty");
     } else if (cfg.provider == stackchan::config::Provider::XiaoZhi) {
         // XiaoZhi is keyed by its server URL; the token is optional.
         xiaozhi_url = cfg.xiaozhi_url.c_str();

@@ -2,6 +2,9 @@
 
 # Groki Bot
 
+> 本分支二次开发：M5 StopWatch 通过 Wi-Fi 直连 xAI Grok Voice，支持触摸打断。配置、编译与验证边界见 [中文使用说明](docs/stopwatch-grok-voice.zh-CN.md)。
+
+
 Groki Bot 桌面机器人（M5Stack CoreS3 加 Stack-chan 底座）的全部内容都在这一个仓库里：机器人**固件**、运行在电脑上的**网关**，以及让机器人把任务交给 **Grok Bot** 应用里智能体的联动机制。
 
 ![Groki Bot 像素风头图：CRT 复古电脑造型的桌面机器人，屏幕上是白色圆脸](docs/images/banner.png)

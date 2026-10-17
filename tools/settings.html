@@ -637,6 +637,9 @@ const I18N = {
     'chat.providerHint': 'Chooses which conversation backend to use. Keys and settings for each one can be saved in the fields below.',
     'chat.openaiKey': 'OpenAI API key',
     'chat.geminiKey': 'Gemini API key',
+    'chat.xaiKey': 'xAI Grok Voice API key',
+    'chat.ph.xai': 'xai-… (leave blank to keep)',
+    'w.xai': 'xAI key written',
     'chat.xzUrl': 'XiaoZhi server URL',
     'chat.xzToken': 'XiaoZhi token',
     'chat.ph.openai': 'sk-… (leave blank to keep)',
@@ -1039,6 +1042,9 @@ const I18N = {
     'chat.providerHint': '切换使用哪一个对话后端。密钥和设置都可以保存在下面各项里。',
     'chat.openaiKey': 'OpenAI API 密钥',
     'chat.geminiKey': 'Gemini API 密钥',
+    'chat.xaiKey': 'xAI Grok Voice API 密钥',
+    'chat.ph.xai': 'xai-…（不修改请留空）',
+    'w.xai': 'xAI 密钥写入完成',
     'chat.xzUrl': 'XiaoZhi 服务器 URL',
     'chat.xzToken': 'XiaoZhi 令牌',
     'chat.ph.openai': 'sk-… （不改请留空）',
@@ -1811,6 +1817,7 @@ function initLangSwitch() {
         <option value="0">OpenAI Realtime</option>
         <option value="1">Google Gemini Live</option>
         <option value="2" data-i18n="chat.xiaozhi">XiaoZhi server</option>
+        <option value="3">xAI Grok Voice</option>
       </select>
       <p class="hint" data-i18n="chat.providerHint">Chooses which conversation backend to use. Keys and settings for each one can be saved in the fields below.</p>
 
@@ -1819,6 +1826,9 @@ function initLangSwitch() {
 
       <label for="gemini-apikey" data-i18n="chat.geminiKey">Gemini API key</label>
       <input type="password" id="gemini-apikey" maxlength="256" placeholder="AIza… (leave blank to keep)" data-i18n-placeholder="chat.ph.gemini">
+
+      <label for="xai-apikey" data-i18n="chat.xaiKey">xAI Grok Voice API key</label>
+      <input type="password" id="xai-apikey" maxlength="256" placeholder="xai-… (leave blank to keep)" data-i18n-placeholder="chat.ph.xai">
 
       <label for="xiaozhi-url" data-i18n="chat.xzUrl">XiaoZhi server URL</label>
       <input type="text" id="xiaozhi-url" maxlength="256" placeholder="ws://192.168.1.10:8000/xiaozhi/v1/ (leave blank to keep)" data-i18n-placeholder="chat.ph.xzUrl">
@@ -2154,6 +2164,7 @@ const CHR_JTTS    = 'e3f0a008-7b1c-4d2a-9e6f-2c5a8d4b1f00';
 const CHR_OTA_CTRL = 'e3f0a009-7b1c-4d2a-9e6f-2c5a8d4b1f00';
 const CHR_OTA_DATA = 'e3f0a00a-7b1c-4d2a-9e6f-2c5a8d4b1f00';
 const CHR_PROVIDER = 'e3f0a00b-7b1c-4d2a-9e6f-2c5a8d4b1f00';
+const CHR_XAI_KEY = 'e3f0a02f-7b1c-4d2a-9e6f-2c5a8d4b1f00';
 const CHR_GEMINI_KEY = 'e3f0a00c-7b1c-4d2a-9e6f-2c5a8d4b1f00';
 const CHR_XIAOZHI_URL = 'e3f0a013-7b1c-4d2a-9e6f-2c5a8d4b1f00';
 const CHR_XIAOZHI_TOKEN = 'e3f0a014-7b1c-4d2a-9e6f-2c5a8d4b1f00';
@@ -2195,7 +2206,7 @@ const DIS_CHRS = {
 
 // --- State ---
 let bleDevice = null, bleServer = null, svc = null;
-let chrSsid = null, chrPass = null, chrKey = null, chrApply = null, chrStatus = null, chrKx = null, chrEn = null, chrRtpEn = null, chrJttsIdleEn = null, chrJtts = null, chrOtaCtrl = null, chrOtaData = null, chrProvider = null, chrGeminiKey = null, chrXiaozhiUrl = null, chrXiaozhiToken = null, chrFaceConfig = null, chrBattery = null, chrBatGauge = null, chrStartupArp = null, chrServoEnabled = null, chrMcpToken = null, chrLtConfig = null, chrServoLimits = null, chrServoRangeMode = null, chrServoPositions = null, chrBoardKind = null, chrWifiIp = null, chrWifiMac = null, chrAudioCtrl = null, chrAudioData = null, chrAudioCredit = null, chrAudioMetrics = null, chrLedState = null, chrMicLipGain = null, chrLedMouthSync = null, chrLipSyncMode = null, chrMicLipAgc = null, chrSpeakerVolume = null, chrJttsSay = null, chrOperationMode = null, chrAudioOutput = null, chrBargeIn = null, chrDeviceName = null, chrAuthPassword = null, chrAvatarBc = null;
+let chrSsid = null, chrPass = null, chrKey = null, chrApply = null, chrStatus = null, chrKx = null, chrEn = null, chrRtpEn = null, chrJttsIdleEn = null, chrJtts = null, chrOtaCtrl = null, chrOtaData = null, chrProvider = null, chrGeminiKey = null, chrXaiKey = null, chrXiaozhiUrl = null, chrXiaozhiToken = null, chrFaceConfig = null, chrBattery = null, chrBatGauge = null, chrStartupArp = null, chrServoEnabled = null, chrMcpToken = null, chrLtConfig = null, chrServoLimits = null, chrServoRangeMode = null, chrServoPositions = null, chrBoardKind = null, chrWifiIp = null, chrWifiMac = null, chrAudioCtrl = null, chrAudioData = null, chrAudioCredit = null, chrAudioMetrics = null, chrLedState = null, chrMicLipGain = null, chrLedMouthSync = null, chrLipSyncMode = null, chrMicLipAgc = null, chrSpeakerVolume = null, chrJttsSay = null, chrOperationMode = null, chrAudioOutput = null, chrBargeIn = null, chrDeviceName = null, chrAuthPassword = null, chrAvatarBc = null;
 let boardKind = null; // null = unknown (older firmware), else 0/1/2 from BOARD_*
 let batteryPollTimer = null;  // setInterval handle while connected
 let jttsInitialJson = '';  // last read JSON, used to detect Apply-time changes
@@ -2720,6 +2731,7 @@ function applyCapabilityGating() {
   const hasSettings = !!(chrSsid && chrPass && chrApply && chrStatus);
   const hasOpenAiKey = !!chrKey;
   const hasGemini = !!(chrProvider && chrGeminiKey);
+  const hasXai = !!(chrProvider && chrXaiKey);
   const hasXiaozhi = !!(chrProvider && chrXiaozhiUrl && chrXiaozhiToken);
   const hasEnable = !!chrEn;
   const hasRtpEnable = !!chrRtpEn;
@@ -2741,6 +2753,9 @@ function applyCapabilityGating() {
   setVisible('label[for="gemini-apikey"], #gemini-apikey', hasGemini);
   setVisible('label[for="xiaozhi-url"], #xiaozhi-url', hasXiaozhi);
   setVisible('label[for="xiaozhi-token"], #xiaozhi-token', hasXiaozhi);
+  setVisible('label[for="xai-apikey"], #xai-apikey', hasXai);
+  const xaiOption = document.querySelector('#provider option[value="3"]');
+  if (xaiOption) { xaiOption.hidden = !hasXai; xaiOption.disabled = !hasXai; }
   // Hide the XiaoZhi provider choice entirely on firmware that lacks its chrs.
   const xzOption = document.querySelector('#provider option[value="2"]');
   if (xzOption) xzOption.hidden = !hasXiaozhi;
@@ -3422,6 +3437,7 @@ document.getElementById('btn-connect').addEventListener('click', async () => {
       ['otaData',    CHR_OTA_DATA],
       ['provider',   CHR_PROVIDER],
       ['geminiKey',  CHR_GEMINI_KEY],
+      ['xaiKey',     CHR_XAI_KEY],
       ['xiaozhiUrl', CHR_XIAOZHI_URL],
       ['xiaozhiToken', CHR_XIAOZHI_TOKEN],
       ['faceConfig', CHR_FACE_CONFIG],
@@ -3478,6 +3494,7 @@ document.getElementById('btn-connect').addEventListener('click', async () => {
     chrOtaData  = found.otaData  ?? null;
     chrProvider = found.provider ?? null;
     chrGeminiKey= found.geminiKey?? null;
+    chrXaiKey = found.xaiKey ?? null;
     chrXiaozhiUrl = found.xiaozhiUrl ?? null;
     chrXiaozhiToken = found.xiaozhiToken ?? null;
     chrFaceConfig = found.faceConfig ?? null;
@@ -3777,7 +3794,7 @@ document.getElementById('btn-connect').addEventListener('click', async () => {
         const sel = document.getElementById('provider');
         sel.value = String(provider);
         sel.dataset.initial = String(provider);
-        log(t('read.provider', { name: provider === 1 ? 'Gemini Live' : 'OpenAI Realtime' }));
+        log(t('read.provider', { name: sel.options[sel.selectedIndex]?.text || String(provider) }));
       } catch (e) {
         log(t('read.providerFail', { msg: e.message }), 'err');
       }
@@ -3877,7 +3894,7 @@ function onDisconnected() {
   ledStateLoaded = false;
   clearTimeout(micLipWriteTimer); micLipWriteTimer = null;
   micLipLoaded = false;
-  chrSsid = chrPass = chrKey = chrApply = chrStatus = chrKx = chrEn = chrRtpEn = chrJttsIdleEn = chrJtts = chrOtaCtrl = chrOtaData = chrProvider = chrGeminiKey = chrXiaozhiUrl = chrXiaozhiToken = chrFaceConfig = chrBattery = chrBatGauge = chrServoEnabled = chrMcpToken = chrLtConfig = chrServoLimits = chrServoRangeMode = chrServoPositions = chrBoardKind = chrWifiIp = chrWifiMac = chrAudioCtrl = chrAudioData = chrAudioCredit = chrAudioMetrics = chrLedState = chrMicLipGain = chrLedMouthSync = chrLipSyncMode = chrMicLipAgc = chrSpeakerVolume = chrJttsSay = chrOperationMode = chrAudioOutput = chrBargeIn = chrAvatarBc = null;
+  chrSsid = chrPass = chrKey = chrApply = chrStatus = chrKx = chrEn = chrRtpEn = chrJttsIdleEn = chrJtts = chrOtaCtrl = chrOtaData = chrProvider = chrGeminiKey = chrXaiKey = chrXiaozhiUrl = chrXiaozhiToken = chrFaceConfig = chrBattery = chrBatGauge = chrServoEnabled = chrMcpToken = chrLtConfig = chrServoLimits = chrServoRangeMode = chrServoPositions = chrBoardKind = chrWifiIp = chrWifiMac = chrAudioCtrl = chrAudioData = chrAudioCredit = chrAudioMetrics = chrLedState = chrMicLipGain = chrLedMouthSync = chrLipSyncMode = chrMicLipAgc = chrSpeakerVolume = chrJttsSay = chrOperationMode = chrAudioOutput = chrBargeIn = chrAvatarBc = null;
   if (typeof refreshAvbcButton === 'function') refreshAvbcButton();
   boardKind = null;
   aesKey = null;
@@ -3926,6 +3943,7 @@ document.getElementById('btn-apply').addEventListener('click', async () => {
   const pass = document.getElementById('password').value;
   const key  = document.getElementById('apikey').value.trim();
   const gkey = document.getElementById('gemini-apikey').value.trim();
+  const xaiKey = document.getElementById('xai-apikey').value.trim();
   const xzUrl = document.getElementById('xiaozhi-url').value.trim();
   const xzToken = document.getElementById('xiaozhi-token').value.trim();
 
@@ -3951,6 +3969,10 @@ document.getElementById('btn-apply').addEventListener('click', async () => {
     if (gkey && chrGeminiKey) {
       await writeEncrypted(chrGeminiKey, strToBytes(gkey));
       log(t('w.gemini'), 'ok');
+    }
+    if (xaiKey && chrXaiKey) {
+      await writeEncrypted(chrXaiKey, strToBytes(xaiKey));
+      log(t('w.xai'), 'ok');
     }
     if (xzUrl && chrXiaozhiUrl) {
       await writeEncrypted(chrXiaozhiUrl, strToBytes(xzUrl));

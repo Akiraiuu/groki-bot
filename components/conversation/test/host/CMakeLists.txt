@@ -45,3 +45,31 @@ target_include_directories(conversation_test_control_dispatch PRIVATE ${CONVERSA
 target_link_libraries(conversation_test_control_dispatch PRIVATE cjson_host)
 target_compile_options(conversation_test_control_dispatch PRIVATE -Wall -Wextra)
 add_test(NAME control_dispatch COMMAND conversation_test_control_dispatch)
+
+# Protocol payloads and settings use the production implementations.
+set(CONFIG_ROOT ${CONVERSATION_ROOT}/../config_service)
+add_executable(conversation_test_realtime_session
+    test_realtime_session.cpp
+    ${CONFIG_ROOT}/settings_registry.cpp
+    ${CONFIG_ROOT}/staged_config.cpp)
+target_include_directories(conversation_test_realtime_session PRIVATE
+    ${CONVERSATION_ROOT} ${CONVERSATION_ROOT}/include
+    ${CONVERSATION_ROOT}/../tl_expected/expected/include
+    ${CONFIG_ROOT}/include)
+target_link_libraries(conversation_test_realtime_session PRIVATE cjson_host)
+target_compile_options(conversation_test_realtime_session PRIVATE -Wall -Wextra)
+add_test(NAME realtime_session COMMAND conversation_test_realtime_session)
+
+# Real client + codecs with only the ESP transport/RTOS replaced by test doubles.
+find_path(MBEDTLS_INCLUDE_DIR mbedtls/base64.h REQUIRED)
+find_library(MBEDCRYPTO_LIBRARY mbedcrypto REQUIRED)
+add_executable(conversation_test_realtime_client
+    test_realtime_client.cpp
+    ${CONVERSATION_ROOT}/openai_realtime_client.cpp
+    ${CONVERSATION_ROOT}/base64.cpp)
+target_include_directories(conversation_test_realtime_client PRIVATE
+    stubs ${CONVERSATION_ROOT} ${CONVERSATION_ROOT}/include
+    ${CONVERSATION_ROOT}/../tl_expected/expected/include ${MBEDTLS_INCLUDE_DIR})
+target_compile_definitions(conversation_test_realtime_client PRIVATE CONFIG_STACKCHAN_CONV_WS_RX_BUFFER=131072)
+target_link_libraries(conversation_test_realtime_client PRIVATE cjson_host ${MBEDCRYPTO_LIBRARY})
+add_test(NAME realtime_client COMMAND conversation_test_realtime_client)

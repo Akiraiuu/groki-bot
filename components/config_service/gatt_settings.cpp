@@ -108,6 +108,10 @@ static const ble_uuid128_t kOtaDataUuid = BLE_UUID128_INIT(
 static const ble_uuid128_t kProviderUuid = BLE_UUID128_INIT(
     0x00, 0x1f, 0x4b, 0x8d, 0x5a, 0x2c, 0x6f, 0x9e,
     0x2a, 0x4d, 0x1c, 0x7b, 0x0b, 0xa0, 0xf0, 0xe3);
+// xAI API key: encrypted write-only characteristic, appended at UUID 0x2f.
+static const ble_uuid128_t kXaiApiKeyUuid = BLE_UUID128_INIT(
+    0x00, 0x1f, 0x4b, 0x8d, 0x5a, 0x2c, 0x6f, 0x9e,
+    0x2a, 0x4d, 0x1c, 0x7b, 0x2f, 0xa0, 0xf0, 0xe3);
 // GeminiApiKey — encrypted string, paired with kKeyApiKey for OpenAI. Stored
 // separately so users can configure both providers and flip between them.
 static const ble_uuid128_t kGeminiApiKeyUuid = BLE_UUID128_INIT(
@@ -431,6 +435,7 @@ static uint16_t g_ota_ctrl_handle = 0;
 static uint16_t g_ota_data_handle = 0;
 static uint16_t g_provider_handle = 0;
 static uint16_t g_gemini_key_handle = 0;
+static uint16_t g_xai_key_handle = 0;
 static uint16_t g_xiaozhi_url_handle = 0;
 static uint16_t g_xiaozhi_token_handle = 0;
 static uint16_t g_face_config_handle = 0;
@@ -1298,6 +1303,7 @@ static int gatt_access_cb(uint16_t /*conn_handle*/, uint16_t attr_handle,
             Provider p = Provider::OpenAi;
             if (pt[0] == static_cast<std::uint8_t>(Provider::Gemini)) p = Provider::Gemini;
             else if (pt[0] == static_cast<std::uint8_t>(Provider::XiaoZhi)) p = Provider::XiaoZhi;
+            else if (pt[0] == static_cast<std::uint8_t>(Provider::Grok)) p = Provider::Grok;
             xSemaphoreTake(g_mutex, portMAX_DELAY);
             g_staging.set_num("provider", static_cast<std::uint32_t>(p));
             xSemaphoreGive(g_mutex);
@@ -1308,6 +1314,14 @@ static int gatt_access_cb(uint16_t /*conn_handle*/, uint16_t attr_handle,
             std::string val(reinterpret_cast<const char*>(pt.data()), pt.size());
             xSemaphoreTake(g_mutex, portMAX_DELAY);
             g_staging.set_str("gemini-api-key", std::move(val));
+            xSemaphoreGive(g_mutex);
+            return 0;
+        }
+        if (attr_handle == g_xai_key_handle) {
+            if (pt.size() > 256) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+            std::string val(reinterpret_cast<const char*>(pt.data()), pt.size());
+            xSemaphoreTake(g_mutex, portMAX_DELAY);
+            g_staging.set_str("xai-api-key", std::move(val));
             xSemaphoreGive(g_mutex);
             return 0;
         }
@@ -1822,6 +1836,12 @@ static ble_gatt_chr_def kChrs[] = {
         .access_cb = gatt_access_cb,
         .flags = BLE_GATT_CHR_F_WRITE,
         .val_handle = &g_gemini_key_handle,
+    },
+    {
+        .uuid = &kXaiApiKeyUuid.u,
+        .access_cb = gatt_access_cb,
+        .flags = BLE_GATT_CHR_F_WRITE,
+        .val_handle = &g_xai_key_handle,
     },
     {
         .uuid = &kXiaozhiUrlUuid.u,

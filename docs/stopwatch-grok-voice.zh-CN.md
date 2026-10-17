@@ -28,7 +28,7 @@ make flash BOARD=stopwatch PORT=/dev/ttyACM0
 
 也可使用项目现有 Docker 构建：`make build-docker BOARD=stopwatch`。输出目录为 `build-stopwatch/`。仅刷自己编译的产物时，可参考该目录的 `flash_args` / `flasher_args.json`，不要使用上游在线刷机页代替本分支固件。
 
-GitHub fork 创建并推送本分支后，可在 Actions 中手动运行原有 **Build and Release Firmware** 工作流并选择开发分支，下载 stopwatch 构建产物。手动运行不会发布 Release。
+GitHub PR 会触发新增的 **StopWatch development firmware** 构建检查；通过后可从对应 Actions 运行的 Artifacts 下载 `stopwatch-grok-voice-<sha>`。构建只产出开发固件，不会自动发布或烧录。原有 **Build and Release Firmware** 工作流也可手动运行。
 
 默认模型为 `grok-voice-latest`，音色为 `eve`。可通过 `CONFIG_STACKCHAN_XAI_REALTIME_MODEL` / `CONFIG_STACKCHAN_XAI_VOICE` 编译选项修改。两者与 OpenAI 的模型、音色配置独立。
 

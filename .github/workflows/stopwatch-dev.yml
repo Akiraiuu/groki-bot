@@ -1,0 +1,66 @@
+name: StopWatch development firmware
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/stopwatch-dev.yml'
+      - 'components/**'
+      - 'main/**'
+      - 'assets/**'
+      - 'tools/**'
+      - 'patches/**'
+      - 'sdkconfig.defaults*'
+      - '*partitions*.csv'
+      - 'CMakeLists.txt'
+      - 'Makefile'
+      - 'script/pack_firmware.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  stopwatch:
+    name: Build StopWatch C152
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    container:
+      image: espressif/idf:release-v5.5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Prepare build
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE/components/M5Unified"
+          apt-get update
+          apt-get install -y --no-install-recommends nodejs
+          tools/apply-m5-patches.sh
+          echo "grok-dev-${GITHUB_SHA::8}" > version.txt
+      - name: Compile StopWatch firmware
+        shell: bash
+        env:
+          CI: true
+        run: |
+          set -euo pipefail
+          . "$IDF_PATH/export.sh"
+          make set-target BOARD=stopwatch
+          make build BOARD=stopwatch
+          python3 script/pack_firmware.py --build-dir build-stopwatch --out build-stopwatch/firmware-stopwatch-grok.bin
+      - name: Upload development firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: stopwatch-grok-voice-${{ github.sha }}
+          retention-days: 14
+          if-no-files-found: error
+          path: |
+            build-stopwatch/firmware-stopwatch-grok.bin
+            build-stopwatch/stackchan_idf.bin
+            build-stopwatch/bootloader/bootloader.bin
+            build-stopwatch/partition_table/partition-table.bin
+            build-stopwatch/ota_data_initial.bin
+            build-stopwatch/flash_args
+            build-stopwatch/flasher_args.json

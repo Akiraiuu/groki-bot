@@ -96,6 +96,191 @@ class AgentProbeTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(probe.ProbeError):
                 await probe.configure(socket, Counter(), {}, 5)
 
+
+    async def test_session_update_missing_audio_is_rejected_and_reported_safely(self):
+        secret = "SECRET_DO_NOT_LOG"
+        socket = Socket([{"type": "session.created", "session": CONFIG},
+                         {"type": "session.updated", "session": {
+                             **CONFIG, "instructions": secret}}])
+        evidence = {}
+        with self.assertRaises(probe.ProbeError) as caught:
+            await probe.configure(socket, Counter(), evidence, 5)
+        self.assertEqual(caught.exception.code, "pcm24k_not_confirmed")
+        self.assertEqual(evidence["updated_audio_evidence"]["format_type"], "missing")
+        self.assertFalse(evidence["updated_audio_evidence"]["output_object"])
+        self.assertNotIn(secret, json.dumps(evidence))
+
+    async def test_legacy_pcm16_recorded_but_rejected_by_default(self):
+        session = {**CONFIG, "output_audio_format": "pcm16",
+                   "audio": {"output": {"transport": "json"}}}
+        socket = Socket([{"type": "session.created", "session": CONFIG},
+                         {"type": "session.updated", "session": session}])
+        evidence = {}
+        with self.assertRaises(probe.ProbeError) as caught:
+            await probe.configure(socket, Counter(), evidence, 5)
+        self.assertEqual(caught.exception.code, "pcm24k_not_confirmed")
+        self.assertEqual(evidence["updated_audio_evidence"]["legacy_output_audio_format"], "pcm16")
+
+    async def test_opt_in_legacy_pcm16_marks_assumed_rate(self):
+        session = {**CONFIG, "output_audio_format": "pcm16",
+                   "audio": {"output": {"transport": "json"}}}
+        socket = Socket([{"type": "session.created", "session": CONFIG},
+                         {"type": "session.updated", "session": session}])
+        evidence = {}
+        await probe.configure(socket, Counter(), evidence, 5, allow_legacy_pcm16=True)
+        self.assertEqual(evidence["audio_validation"], "legacy_pcm16_rate_24000_assumed")
+        self.assertIs(evidence["sample_rate_explicitly_confirmed"], False)
+        self.assertEqual(evidence["changed_published_fields"], [])
+
+    async def test_legacy_non_pcm16_and_conflicting_nested_format_are_rejected(self):
+        for session in (
+            {**CONFIG, "output_audio_format": "g711_ulaw",
+             "audio": {"output": {"transport": "json"}}},
+            {**CONFIG, "output_audio_format": "pcm16",
+             "audio": {"output": {"transport": "json",
+                                   "format": {"type": "audio/pcm", "rate": 16000}}}},
+            {**CONFIG, "output_audio_format": "pcm16",
+             "audio": {"output": {"transport": "binary"}}},
+        ):
+            with self.subTest(session=session):
+                socket = Socket([{"type": "session.created", "session": CONFIG},
+                                 {"type": "session.updated", "session": session}])
+                with self.assertRaises(probe.ProbeError):
+                    await probe.configure(socket, Counter(), {}, 5, allow_legacy_pcm16=True)
+
+    def test_legacy_metadata_never_logs_unknown_strings(self):
+        for suspicious in ("my-api-key", {"token": "secret"}, 123, None):
+            evidence = probe.safe_audio_evidence({"session": {
+                "output_audio_format": suspicious}})
+            self.assertEqual(evidence["legacy_output_audio_format"], "other")
+            self.assertNotIn("secret", json.dumps(evidence))
+
+    def test_audio_shapes_distinguish_null_string_and_object_without_leaks(self):
+        for value, kind in ((None, "null"), ("pcm16", "string"),
+                            ({"type": "audio/pcm", "rate": 24000}, "object")):
+            evidence = probe.safe_audio_evidence({"session": {"output_audio_format": value}})
+            self.assertEqual(evidence["locations"]["session.output_audio_format"]["kind"], kind)
+        unsafe = {"session": {"output_audio_format": {"type": "SECRET_TYPE", "api_key": "SECRET_KEY"},
+                              "audio": {"output": {"format": {"type": "SECRET_TYPE", "rate": 24000}}}}}
+        rendered = json.dumps(probe.safe_audio_evidence(unsafe))
+        self.assertNotIn("SECRET", rendered)
+        self.assertNotIn("api_key", rendered)
+
+    async def test_explicit_legacy_object_is_parsed_without_assuming_rate(self):
+        for fmt in ({"type": "audio/pcm", "rate": 24000},
+                    {"type": "pcm16", "sample_rate": 24000, "channels": 1}):
+            session = {**CONFIG, "output_audio_format": fmt,
+                       "audio": {"output": {"transport": "json"}}}
+            socket = Socket([{"type": "session.created", "session": CONFIG},
+                             {"type": "session.updated", "session": session}])
+            evidence = {}
+            await probe.configure(socket, Counter(), evidence, 5)
+            self.assertEqual(evidence["audio_validation"], "explicit_legacy_pcm_24000")
+            self.assertTrue(evidence["sample_rate_explicitly_confirmed"])
+
+    async def test_compatibility_never_masks_conflicting_rate_codec_or_channels(self):
+        cases = (
+            {"output_audio_format": "pcm16", "output_audio_sample_rate": 16000},
+            {"output_audio_format": {"type": "pcm16", "rate": 24000, "sample_rate": 16000}},
+            {"output_audio_format": {"type": "pcm16", "rate": 24000, "channels": 2}},
+            {"output_audio_format": {"type": "audio/pcmu", "rate": 24000},
+             "audio": {"output": {"format": {"type": "audio/pcm", "rate": 24000}}}},
+            {"output_audio_format": "pcm16", "audio": {"output": {"format": "unrecognized"}}},
+        )
+        for extra in cases:
+            with self.subTest(extra=extra):
+                evidence = {}
+                with self.assertRaises(probe.ProbeError):
+                    probe.validate_audio({**CONFIG, **extra}, evidence, True)
+
+    async def test_diagnostic_retains_config_when_format_missing_or_null(self):
+        # User's real report established a legacy field was present, but did
+        # not capture its value. Exercise possible shapes without inventing it.
+        for legacy in (None, "unrecognized", {"unexpected": "SECRET"}):
+            session = {**CONFIG, "instructions": "", "tools": [],
+                       "output_audio_format": legacy, "audio": {"output": {"transport": "json"}}}
+            socket = Socket([{"type": "session.created", "session": CONFIG},
+                             {"type": "session.updated", "session": session}])
+            evidence = {}
+            await probe.configure(socket, Counter(), evidence, 5, diagnostic=True)
+            self.assertFalse(evidence["audio_configured"])
+            self.assertTrue(evidence["session_update_received"])
+            self.assertEqual(evidence["updated_config_metadata"]["instructions"], "empty")
+            self.assertEqual(evidence["updated_config_metadata"]["tools"], "empty")
+            self.assertEqual(evidence["changed_published_fields"], ["instructions", "tools"])
+            self.assertNotIn("SECRET", json.dumps(evidence))
+
+    def test_empty_config_fingerprints_are_not_reported_as_full_match(self):
+        empty = {"instructions": "", "tools": [], "voice": "voice", "model": "model"}
+        results = {mode: {"updated_config_fingerprints": probe.config_evidence(empty)}
+                   for mode in ("key", "ephemeral")}
+        comparison = probe.compare_configs(results)
+        self.assertEqual(comparison["status"], "match_with_empty_fields")
+        self.assertEqual(comparison["basis"], "updated")
+        self.assertEqual(comparison["empty_fields"], ["instructions", "tools"])
+        self.assertFalse(comparison["agent_configuration_verified"])
+
+    def test_agent_id_metadata_compares_without_storing_identifier(self):
+        result = probe.config_metadata({**CONFIG, "agent_id": "agent_private"}, "agent_private")
+        self.assertTrue(result["agent_id_matches_requested"])
+        self.assertNotIn("agent_private", json.dumps(result))
+
+    async def test_returned_different_agent_id_blocks_dialogue(self):
+        session = {**CONFIG, "agent_id": "agent_different", **probe.audio_config()["session"]}
+        socket = Socket([{"type": "session.created", "session": CONFIG},
+                         {"type": "session.updated", "session": session}])
+        with self.assertRaises(probe.ProbeError) as caught:
+            await probe.configure(socket, Counter(), {}, 5, expected_agent_id="agent_requested")
+        self.assertEqual(caught.exception.code, "returned_agent_id_mismatch")
+
+    async def test_diagnostic_succeeds_at_collection_without_claiming_audio_success(self):
+        sockets = []
+        def connect(url, **kwargs):
+            # Reconstruct only the known shape; the real legacy value remains
+            # unknown until a new report is collected.
+            session = {**CONFIG, "instructions": "", "tools": [],
+                       "output_audio_format": None, "audio": {"output": {"transport": "json"}}}
+            socket = Socket([{"type": "session.created", "session": session},
+                             {"type": "session.updated", "session": session}])
+            sockets.append(socket)
+            return socket
+        with tempfile.TemporaryDirectory() as directory:
+            args = argparse.Namespace(auth="compare", rounds=10, timeout=5, output=directory,
+                                      session_only=True, play=True, cancel_probe=True)
+            with patch("websockets.asyncio.client.connect", connect), patch.object(
+                    probe, "issue_token", AsyncMock(return_value="short-token")), patch("builtins.print"):
+                self.assertEqual(await probe.run(args, "private-key", "agent_example"), 0)
+            report = json.loads(next(Path(directory).rglob("report.json")).read_text(encoding="utf-8"))
+            self.assertEqual(report["tool_version"], "0.3.0")
+            self.assertEqual(report["output_format"], "not_generated")
+            self.assertFalse(list(Path(directory).rglob("*.wav")))
+            for mode in ("key", "ephemeral"):
+                result = report["results"][mode]
+                self.assertTrue(result["session_only_completed"])
+                self.assertFalse(result["protocol_ok"])
+                self.assertFalse(result["audio_configured"])
+                self.assertIn("updated_config_fingerprints", result)
+                self.assertEqual(result["audio_error"]["code"], "pcm24k_not_confirmed")
+            self.assertFalse(any(event["type"] == "response.create"
+                                 for socket in sockets for event in socket.sent))
+
+    async def test_session_only_skips_response_create(self):
+        sockets = []
+        def connect(url, **kwargs):
+            socket = Socket()
+            sockets.append(socket)
+            return socket
+        with tempfile.TemporaryDirectory() as directory:
+            args = argparse.Namespace(auth="key", rounds=10, timeout=5, output=directory,
+                                      session_only=True, play=False, cancel_probe=False)
+            with patch("websockets.asyncio.client.connect", connect), patch("builtins.print"):
+                self.assertEqual(await probe.run(args, "private-key", "agent_example"), 0)
+            self.assertFalse(any(event["type"] == "response.create" for event in sockets[0].sent))
+            report = json.loads(next(Path(directory).rglob("report.json")).read_text(encoding="utf-8"))
+            self.assertEqual(report["rounds_requested_per_mode"], 0)
+            self.assertTrue(report["results"]["key"]["session_only_completed"])
+            self.assertFalse(report["results"]["key"]["protocol_ok"])
+
     async def test_late_audio_cannot_pollute_next_reply(self):
         socket = Socket([
             {"type": "response.output_audio.delta", "response_id": "old", "delta": "%%%"},

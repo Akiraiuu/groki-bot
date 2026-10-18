@@ -22,8 +22,11 @@ on:
 
 jobs:
   saved-agent-probe-tests:
-    name: Saved Agent probe tests (offline)
-    runs-on: ubuntu-latest
+    name: Saved Agent probe tests (${{ matrix.os }})
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -32,22 +35,31 @@ jobs:
       - run: python -m pip install -r tools/stopwatch-agent/requirements.txt
       - name: Verify protocol harness without real credentials
         run: python -m unittest discover -s tools/stopwatch-agent -p 'test_*.py' -v
+      - name: Verify Windows Python discovery
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: tools\stopwatch-agent\run-windows.cmd --check-python
       - name: Package Windows probe (no credentials)
+        if: runner.os == 'Windows'
+        shell: bash
         run: |
           python - <<'PY'
           from pathlib import Path
           from zipfile import ZipFile, ZIP_DEFLATED
+          import re
           root = Path('tools/stopwatch-agent')
+          version = re.search(r'^TOOL_VERSION = "([^"]+)"$', (root / 'verify_agent.py').read_text(encoding='utf-8'), re.M).group(1)
           names = ('verify_agent.py', 'requirements.txt', 'run-windows.cmd',
-                   'README.zh-CN.md', 'test_verify_agent.py')
+                   'README.zh-CN.md', 'test_verify_agent.py', '.gitignore')
           with ZipFile('StopWatch-Agent-P1-Windows.zip', 'w', ZIP_DEFLATED) as bundle:
               for name in names:
                   data = (root / name).read_bytes()
                   if name.endswith('.cmd'):
                       data = data.replace(b'\r\n', b'\n').replace(b'\n', b'\r\n')
-                  bundle.writestr('StopWatch-Agent-P1/' + name, data)
+                  bundle.writestr('StopWatch-Agent-P1-v' + version + '/' + name, data)
           PY
       - uses: actions/upload-artifact@v4
+        if: runner.os == 'Windows'
         with:
           name: stopwatch-agent-p1-windows
           path: StopWatch-Agent-P1-Windows.zip

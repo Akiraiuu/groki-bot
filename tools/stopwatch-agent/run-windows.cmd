@@ -27,7 +27,7 @@ if errorlevel 1 goto failed
 if "%~1"=="--check-python" exit /b 0
 ".venv\Scripts\python.exe" -m pip install -r requirements.txt
 if errorlevel 1 goto failed
-".venv\Scripts\python.exe" verify_agent.py --session-only --auth compare
+".venv\Scripts\python.exe" verify_agent.py --session-only --auth key
 set "probe_exit=%errorlevel%"
 echo.
 echo Finished. Exit code: %probe_exit%

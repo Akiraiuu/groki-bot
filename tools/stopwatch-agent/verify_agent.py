@@ -26,7 +26,7 @@ import wave
 
 TOKEN_URL = "https://api.x.ai/v1/realtime/client_secrets"
 WS_URL = "wss://api.x.ai/v1/realtime"
-TOOL_VERSION = "0.3.0"
+TOOL_VERSION = "0.3.1"
 SAMPLE_RATE = 24000
 MAX_AUDIO_BYTES = SAMPLE_RATE * 2 * 180
 PROMPTS = (
@@ -89,12 +89,22 @@ def audio_config():
     }}}}
 
 
+def published_config(session):
+    fields = {key: session[key] for key in ("model", "voice", "instructions", "tools") if key in session}
+    audio = session.get("audio")
+    output = audio.get("output") if isinstance(audio, dict) else None
+    if "voice" not in fields and isinstance(output, dict) and "voice" in output:
+        fields["voice"] = output["voice"]
+    return fields
+
+
 def config_evidence(session):
     """Hash only published config fields the server actually disclosed.
 
     Missing fields stay missing: an empty hash must not prove configuration
     equality. Fingerprints are evidence for comparison, never Agent validation.
     """
+    session = published_config(session)
     result = {}
     for field in ("model", "voice", "instructions", "tools"):
         if field in session:
@@ -105,16 +115,18 @@ def config_evidence(session):
 
 def config_metadata(session, expected_agent_id=None):
     """Presence/emptiness is useful evidence without publishing configuration."""
-    result = {}
+    result = {"voice_location": "session.voice" if "voice" in session else
+              ("session.audio.output.voice" if "voice" in published_config(session) else "missing")}
+    fields = published_config(session)
     for field in ("model", "voice", "instructions", "tools"):
-        if field not in session:
+        if field not in fields:
             state = "missing"
-        elif session[field] is None:
+        elif fields[field] is None:
             state = "null"
-        elif isinstance(session[field], str):
-            state = "populated" if session[field].strip() else "empty"
-        elif isinstance(session[field], list):
-            state = "populated" if session[field] else "empty"
+        elif isinstance(fields[field], str):
+            state = "populated" if fields[field].strip() else "empty"
+        elif isinstance(fields[field], list):
+            state = "populated" if fields[field] else "empty"
         else:
             state = "other_type"
         result[field] = state
@@ -181,6 +193,23 @@ async def receive(ws, deadline, counts):
 
 
 
+def codec_label(value):
+    """Capture short technical format names, without emitting key-like data.
+
+    This field is codec metadata, never a transcript or prompt. Known process
+    credentials are additionally redacted when the final report is written.
+    """
+    if not isinstance(value, str):
+        return "not_a_string"
+    if not value or not value.strip():
+        return "empty" if not value else "whitespace_only"
+    if (len(value) <= 64 and re.fullmatch(r"[A-Za-z][A-Za-z0-9/_.+;= -]*", value)
+            and not re.search(r"key|secret|token|bearer|credential|password|^sk[-_]|^xai[-_]", value, re.I)
+            and not re.search(r"[A-Za-z0-9_-]{24,}", value)):
+        return value
+    return "redacted_unrecognized_value"
+
+
 def safe_audio_shape(value):
     """Bounded schema information, excluding arbitrary strings and field names."""
     if isinstance(value, dict):
@@ -245,6 +274,9 @@ def safe_audio_evidence(event):
             else ("missing" if not isinstance(session, dict) or
                   "output_audio_format" not in session else "other")
         ),
+        "legacy_output_audio_format_label": codec_label(session.get("output_audio_format"))
+            if isinstance(session, dict) and "output_audio_format" in session else "missing",
+        "output_voice_present": isinstance(output, dict) and "voice" in output,
         "locations": audio_locations(event),
     }
 
@@ -285,6 +317,7 @@ def validate_audio(session, evidence, allow_legacy_pcm16):
     nested = fmt is not None and fmt != {}
     selected = fmt if nested else legacy
     codec = selected.get("type") if isinstance(selected, dict) else selected
+    codec = codec.strip().lower() if isinstance(codec, str) else codec
     evidence["audio_validation"] = "unconfirmed"
     evidence["sample_rate_explicitly_confirmed"] = False
     if codec not in ("audio/pcm", "pcm16"):
@@ -292,6 +325,7 @@ def validate_audio(session, evidence, allow_legacy_pcm16):
         raise ProbeError("session", "pcm24k_not_confirmed")
 
     legacy_codec = legacy.get("type") if isinstance(legacy, dict) else legacy
+    legacy_codec = legacy_codec.strip().lower() if isinstance(legacy_codec, str) else legacy_codec
     if nested and legacy_codec in ("g711_ulaw", "g711_alaw", "audio/pcmu", "audio/pcma", "audio/opus"):
         evidence["audio_validation_detail"] = "conflicting_codec_metadata"
         raise ProbeError("session", "pcm24k_not_confirmed")
@@ -332,42 +366,49 @@ async def configure(ws, counts, evidence, timeout, *, allow_legacy_pcm16=False,
             evidence["created_config_fingerprints"] = config_evidence(session)
             evidence["created_config_metadata"] = config_metadata(session, expected_agent_id)
             break
-    await send(ws, audio_config())
-    while True:
-        event = await receive(ws, deadline, counts)
-        if event["type"] == "session.updated":
-            evidence["updated_audio_evidence"] = safe_audio_evidence(event)
-            session = event.get("session")
-            if not isinstance(session, dict):
-                raise ProbeError("session", "session_object_missing")
-            evidence["session_update_received"] = True
-            updated = config_evidence(session)
-            evidence["updated_config_fingerprints"] = updated
-            evidence["updated_config_metadata"] = config_metadata(session, expected_agent_id)
-            created = evidence["created_config_fingerprints"]
-            changed = sorted(field for field in created.keys() & updated.keys()
-                             if created[field] != updated[field])
-            evidence["changed_published_fields"] = changed
-            try:
-                validate_audio(session, evidence, allow_legacy_pcm16)
-                evidence["audio_configured"] = True
-            except ProbeError as error:
-                evidence["audio_configured"] = False
-                evidence["audio_error"] = classify_error(error)
-                if not diagnostic:
-                    raise
-            if changed:
-                error = ProbeError("session", "published_config_changed_after_audio_update")
-                evidence["config_error"] = classify_error(error)
-                if not diagnostic:
-                    raise error
-            if any(evidence[key].get("agent_id_matches_requested") is False
-                   for key in ("created_config_metadata", "updated_config_metadata")):
-                error = ProbeError("session", "returned_agent_id_mismatch")
-                evidence["config_error"] = classify_error(error)
-                if not diagnostic:
-                    raise error
-            return
+    # session.created can contain defaults before the saved Agent is populated.
+    # Establish the first updated snapshot, then repeat the SAME audio-only
+    # request to distinguish initial population from a subsequent config change.
+    for stage in ("updated", "confirmed"):
+        await send(ws, audio_config())
+        while True:
+            event = await receive(ws, deadline, counts)
+            if event["type"] == "session.updated":
+                break
+        session = event.get("session")
+        if not isinstance(session, dict):
+            raise ProbeError("session", "session_object_missing")
+        evidence[stage + "_audio_evidence"] = safe_audio_evidence(event)
+        evidence[stage + "_config_fingerprints"] = config_evidence(session)
+        evidence[stage + "_config_metadata"] = config_metadata(session, expected_agent_id)
+        evidence["session_update_received"] = True
+    created = evidence["created_config_fingerprints"]
+    updated = evidence["updated_config_fingerprints"]
+    confirmed = evidence["confirmed_config_fingerprints"]
+    evidence["initial_changed_published_fields"] = sorted(
+        field for field in created.keys() & updated.keys() if created[field] != updated[field])
+    changed = sorted(field for field in updated.keys() & confirmed.keys()
+                     if updated[field] != confirmed[field])
+    evidence["changed_published_fields"] = changed
+    evidence["config_stability_compared_fields"] = sorted(updated.keys() & confirmed.keys())
+    evidence["config_stability_unavailable_fields"] = sorted(
+        {"model", "voice", "instructions", "tools"} - (updated.keys() & confirmed.keys()))
+    try:
+        validate_audio(session, evidence, allow_legacy_pcm16)
+        evidence["audio_configured"] = True
+    except ProbeError as error:
+        evidence["audio_configured"] = False
+        evidence["audio_error"] = classify_error(error)
+    if changed:
+        evidence["config_error"] = classify_error(
+            ProbeError("session", "published_config_changed_after_audio_update"))
+    if any(evidence[stage + "_config_metadata"].get("agent_id_matches_requested") is False
+           for stage in ("created", "updated", "confirmed")):
+        evidence["config_error"] = classify_error(ProbeError("session", "returned_agent_id_mismatch"))
+    if not diagnostic:
+        error = evidence.get("config_error") or evidence.get("audio_error")
+        if error:
+            raise ProbeError(error["stage"], error["code"])
 
 
 async def collect_reply(ws, counts, timeout, *, cancel=False):
@@ -486,7 +527,7 @@ async def probe_mode(mode, api_key, url, args, folder, redactor, result):
                 result["session_only_completed"] = True
                 status = "已确认" if result.get("audio_configured") else "未确认（不会生成或播放音频）"
                 print(f"[{mode}] 诊断采集完成；音频格式{status}")
-                meta = result.get("updated_config_metadata", {})
+                meta = result.get("confirmed_config_metadata", {})
                 print(f"[{mode}] 服务端返回的人设状态: {meta.get('instructions', 'missing')}；工具状态: {meta.get('tools', 'missing')}")
                 return
             for number, prompt in enumerate(PROMPTS[:args.rounds], 1):
@@ -523,8 +564,9 @@ async def probe_mode(mode, api_key, url, args, folder, redactor, result):
 def compare_configs(results):
     if not all(mode in results for mode in ("key", "ephemeral")):
         return {"status": "not_run"}
-    basis = "updated" if all("updated_config_fingerprints" in results[mode]
-                             for mode in ("key", "ephemeral")) else "created"
+    basis = next((stage for stage in ("confirmed", "updated")
+                  if all(stage + "_config_fingerprints" in results[mode]
+                         for mode in ("key", "ephemeral"))), "created")
     a = results["key"].get(basis + "_config_fingerprints", {})
     b = results["ephemeral"].get(basis + "_config_fingerprints", {})
     shared = sorted(a.keys() & b.keys())

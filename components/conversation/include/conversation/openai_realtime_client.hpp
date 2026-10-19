@@ -10,14 +10,16 @@
 
 namespace stackchan::conversation {
 
-// ConversationService backed by the OpenAI Realtime API over a raw WebSocket
+enum class RealtimeBackend : std::uint8_t { OpenAi, Xai };
+
+// ConversationService backed by the OpenAI Realtime API or xAI Voice API over a raw WebSocket
 // (wss://api.openai.com/v1/realtime). Server-side VAD/STT/LLM/TTS — the whole
 // pipeline runs in one session, so commit_audio() is a no-op here.
 class OpenAiRealtimeClient final : public ConversationService {
 public:
-    // `api_key` is the OpenAI API key used for the WebSocket upgrade
+    // `api_key` is the selected backend's API key used for the WebSocket upgrade
     // (Authorization: Bearer ...).
-    explicit OpenAiRealtimeClient(std::string api_key);
+    explicit OpenAiRealtimeClient(std::string api_key, RealtimeBackend backend = RealtimeBackend::OpenAi);
     ~OpenAiRealtimeClient() override;
 
     OpenAiRealtimeClient(const OpenAiRealtimeClient&) = delete;

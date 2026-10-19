@@ -24,12 +24,13 @@
 #include "base64.hpp"
 #include "psram_allocator.hpp"
 #include "ws_extra_headers.hpp"
+#include "realtime_session.hpp"
 
 namespace stackchan::conversation {
 
 namespace {
 
-constexpr const char* kTag = "openai-rt";
+constexpr const char* kTag = "realtime";
 
 // wss host + path. The model is appended as a query parameter.
 constexpr const char* kRealtimeUriPrefix = "wss://api.openai.com/v1/realtime?model=";
@@ -111,7 +112,8 @@ std::uint8_t pcm16_to_ulaw(std::int16_t pcm)
 
 class OpenAiRealtimeClient::Impl {
 public:
-    explicit Impl(std::string api_key) : api_key_{std::move(api_key)} {}
+    explicit Impl(std::string api_key, RealtimeBackend backend)
+        : api_key_{std::move(api_key)}, backend_{backend} {}
 
     ~Impl() { teardown(); }
 
@@ -121,6 +123,9 @@ public:
             return tl::unexpected{ConversationError::InvalidState};
         }
         config_ = config;
+        response_active_.store(false, std::memory_order_relaxed);
+        discard_response_.store(false, std::memory_order_relaxed);
+        fn_args_.clear();
         output_is_ulaw_ = (config_.output_sample_rate_hz == kG711SampleRate);
         tx_evicted_total_.store(0, std::memory_order_relaxed);
         last_evict_log_ms_ = 0;
@@ -138,7 +143,9 @@ public:
         b64_scratch_.assign(b64_cap, '\0');
         json_scratch_.assign(b64_cap + 128, '\0');
 
-        const std::string uri = std::string{kRealtimeUriPrefix} + config_.model;
+        const std::string uri = std::string{backend_ == RealtimeBackend::Xai
+                                                ? "wss://api.x.ai/v1/realtime?model="
+                                                : kRealtimeUriPrefix} + config_.model;
 
         esp_websocket_client_config_t cfg{};
         cfg.uri = uri.c_str();
@@ -299,6 +306,9 @@ public:
         if (client_ == nullptr || !esp_websocket_client_is_connected(client_)) {
             return tl::unexpected{ConversationError::NotConnected};
         }
+        // Ignore remaining events from this reply until a new response starts.
+        // The local speaker stops immediately, while cancellation crosses Wi-Fi.
+        discard_response_.store(true, std::memory_order_relaxed);
         // Only send response.cancel when a response is actually still being
         // generated. The server streams replies faster than realtime, so by
         // the time the user barges in the response is usually already done —
@@ -596,82 +606,7 @@ private:
 
     void send_session_update()
     {
-        // GA Realtime API session.update payload:
-        //   { "type": "session.update",
-        //     "session": { "type": "realtime",
-        //                  "model": "...",
-        //                  "output_modalities": ["audio"],
-        //                  "instructions": "...",
-        //                  "audio": { "input":  { "format": {...}, "turn_detection": {...},
-        //                                         "transcription": {...} },
-        //                             "output": { "format": {...}, "voice": "..." } },
-        //                  "tools": [...], "tool_choice": "auto" } }
-        cJSON* root = cJSON_CreateObject();
-        cJSON_AddStringToObject(root, "type", "session.update");
-        cJSON* session = cJSON_AddObjectToObject(root, "session");
-        cJSON_AddStringToObject(session, "type", "realtime");
-
-        if (!config_.model.empty()) {
-            cJSON_AddStringToObject(session, "model", config_.model.c_str());
-        }
-
-        cJSON* mods = cJSON_AddArrayToObject(session, "output_modalities");
-        cJSON_AddItemToArray(mods, cJSON_CreateString("audio"));
-
-        if (!config_.instructions.empty()) {
-            cJSON_AddStringToObject(session, "instructions", config_.instructions.c_str());
-        }
-
-        // ---- audio.input / audio.output ----
-        cJSON* audio = cJSON_AddObjectToObject(session, "audio");
-
-        cJSON* in = cJSON_AddObjectToObject(audio, "input");
-        cJSON* in_fmt = cJSON_AddObjectToObject(in, "format");
-        // Mic uplink is G.711 µ-law @ 8 kHz — 6× lighter on the wire than
-        // pcm16 @ 24 kHz, which made the audio path immune to coex /
-        // DTIM stalls eating its TCP send buffer. The mic side encodes
-        // PCM16 → µ-law in push_audio (see pcm16_to_ulaw). OpenAI Realtime
-        // accepts pcmu only at 8 kHz, so no rate field.
-        cJSON_AddStringToObject(in_fmt, "type", "audio/pcmu");
-
-        cJSON* vad = cJSON_AddObjectToObject(in, "turn_detection");
-        cJSON_AddStringToObject(vad, "type", "server_vad");
-        cJSON_AddNumberToObject(vad, "threshold", config_.vad_threshold);
-        cJSON_AddNumberToObject(vad, "prefix_padding_ms", config_.vad_prefix_padding_ms);
-        cJSON_AddNumberToObject(vad, "silence_duration_ms", config_.vad_silence_ms);
-
-        if (config_.enable_input_transcription) {
-            cJSON* tr = cJSON_AddObjectToObject(in, "transcription");
-            cJSON_AddStringToObject(tr, "model", "whisper-1");
-        }
-
-        cJSON* out = cJSON_AddObjectToObject(audio, "output");
-        cJSON* out_fmt = cJSON_AddObjectToObject(out, "format");
-        if (output_is_ulaw_) {
-            cJSON_AddStringToObject(out_fmt, "type", "audio/pcmu"); // G.711 µ-law @ 8 kHz
-        } else {
-            cJSON_AddStringToObject(out_fmt, "type", "audio/pcm");
-            cJSON_AddNumberToObject(out_fmt, "rate", config_.output_sample_rate_hz);
-        }
-        if (!config_.voice.empty()) {
-            cJSON_AddStringToObject(out, "voice", config_.voice.c_str());
-        }
-
-        // ---- tools ----
-        cJSON* tools = cJSON_AddArrayToObject(session, "tools");
-        for (const auto& tool : config_.tools) {
-            cJSON* t = cJSON_CreateObject();
-            cJSON_AddStringToObject(t, "type", "function");
-            cJSON_AddStringToObject(t, "name", tool.name.c_str());
-            cJSON_AddStringToObject(t, "description", tool.description.c_str());
-            cJSON* params = cJSON_Parse(tool.parameters_json.c_str());
-            if (params != nullptr) {
-                cJSON_AddItemToObject(t, "parameters", params);
-            }
-            cJSON_AddItemToArray(tools, t);
-        }
-        cJSON_AddStringToObject(session, "tool_choice", "auto");
-
+        cJSON* root = build_realtime_session(config_, backend_);
         {
             std::lock_guard lock{send_mutex_};
             send_json(root);
@@ -701,7 +636,16 @@ private:
             return;
         }
 
-        if (std::strcmp(type, "session.created") == 0 || std::strcmp(type, "session.updated") == 0) {
+        // WebSocket ordering guarantees the cancelled turn finishes before
+        // the next response.created. Do not replay late audio or tool calls.
+        if (discard_response_.load(std::memory_order_relaxed) &&
+            std::strncmp(type, "response.", 9) == 0 &&
+            std::strcmp(type, "response.created") != 0) {
+            cJSON_Delete(root);
+            return;
+        }
+
+        if (std::strcmp(type, "session.updated") == 0) {
             ESP_LOGI(kTag, "%s", type);
             if (!session_updated_) {
                 session_updated_ = true;
@@ -720,6 +664,8 @@ private:
             ev.text = transcript != nullptr ? transcript : "";
             emit(ev);
         } else if (std::strcmp(type, "response.created") == 0) {
+            discard_response_.store(false, std::memory_order_relaxed);
+            fn_args_.clear();
             response_active_.store(true, std::memory_order_relaxed);
         } else if (std::strcmp(type, "response.output_audio.delta") == 0 ||
                    std::strcmp(type, "response.audio.delta") == 0) { // GA / beta names
@@ -844,6 +790,8 @@ private:
     // ---- members -----------------------------------------------------------
 
     std::string api_key_;
+    RealtimeBackend backend_;
+    std::atomic<bool> discard_response_{false};
     ConversationConfig config_{};
     EventCallback event_callback_{};
 
@@ -887,8 +835,8 @@ private:
     std::unordered_map<std::string, std::string> fn_args_;
 };
 
-OpenAiRealtimeClient::OpenAiRealtimeClient(std::string api_key)
-    : impl_{std::make_unique<Impl>(std::move(api_key))}
+OpenAiRealtimeClient::OpenAiRealtimeClient(std::string api_key, RealtimeBackend backend)
+    : impl_{std::make_unique<Impl>(std::move(api_key), backend)}
 {
 }
 

@@ -285,7 +285,9 @@ public:
         } else if (provider_ == config::Provider::XiaoZhi) {
             client_ = std::make_unique<conv::XiaoZhiClient>(xiaozhi_url_, xiaozhi_token_);
         } else {
-            client_ = std::make_unique<conv::OpenAiRealtimeClient>(api_key_);
+            client_ = std::make_unique<conv::OpenAiRealtimeClient>(
+                api_key_, provider_ == config::Provider::Grok
+                              ? conv::RealtimeBackend::Xai : conv::RealtimeBackend::OpenAi);
         }
         client_->set_event_callback([this](const conv::ConversationEvent& ev) { enqueue_event(ev); });
 
@@ -360,13 +362,23 @@ private:
     // recovery path to drop stale events emitted by the WebSocket client we
     // just shut down — otherwise the freshly-connected new client gets
     // immediately knocked over by a left-over DISCONNECTED from the old one.
-    void flush_events()
+    void flush_events(bool preserve_connection_events = false)
     {
+        std::vector<conv::ConversationEvent*> retained;
         conv::ConversationEvent* ev = nullptr;
         std::size_t dropped = 0;
         while (xQueueReceive(event_queue_, &ev, 0) == pdTRUE) {
+            if (preserve_connection_events &&
+                (ev->type == conv::ConversationEventType::Error ||
+                 ev->type == conv::ConversationEventType::GoingAway)) {
+                retained.push_back(ev);
+                continue;
+            }
             delete ev;
             ++dropped;
+        }
+        for (auto* event : retained) {
+            if (xQueueSend(event_queue_, &event, 0) != pdTRUE) delete event;
         }
         if (dropped > 0) {
             ESP_LOGD(kTag, "flushed %u stale events", static_cast<unsigned>(dropped));
@@ -390,6 +402,9 @@ private:
             // preview is what's actually live on the Developer API right now.
             cfg.model = "gemini-2.5-flash-native-audio-preview-12-2025";
             cfg.voice = "Aoede"; // pre-built voice name; OK to leave empty
+        } else if (provider_ == config::Provider::Grok) {
+            cfg.model = CONFIG_STACKCHAN_XAI_REALTIME_MODEL;
+            cfg.voice = CONFIG_STACKCHAN_XAI_VOICE;
         } else {
             cfg.model = CONFIG_STACKCHAN_OPENAI_REALTIME_MODEL;
             cfg.voice = CONFIG_STACKCHAN_OPENAI_VOICE;
@@ -738,6 +753,9 @@ private:
         ESP_LOGI(kTag, "barge-in: user touched the head, interrupting reply");
         M5.Speaker.stop();
         (void)client_->cancel_response();
+        // Discard audio already queued before the backend saw cancellation,
+        // retaining connection failures so the normal recovery path sees them.
+        flush_events(/*preserve_connection_events=*/true);
         state_.set_balloon_text("我在呢？", /*hold_ms=*/1500);
         log_playback_metrics();
         enter_listening();
@@ -1269,6 +1287,7 @@ private:
         switch (provider_) {
         case config::Provider::Gemini: return "Gemini";
         case config::Provider::XiaoZhi: return "XiaoZhi";
+        case config::Provider::Grok: return "Grok Voice";
         default: return "OpenAI";
         }
     }

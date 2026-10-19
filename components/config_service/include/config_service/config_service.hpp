@@ -23,6 +23,7 @@ enum class Provider : std::uint8_t {
     OpenAi = 0,   // OpenAI Realtime API (wss://api.openai.com/v1/realtime)
     Gemini = 1,   // Google Gemini Live API (wss://generativelanguage.googleapis.com/...)
     XiaoZhi = 2,  // XiaoZhi AI server (ws://<host>:8000/xiaozhi/v1/)
+    Grok = 3,     // xAI Voice API (wss://api.x.ai/v1/realtime)
 };
 
 // Avatar's primary "what is the robot doing right now?" mode. Replaces the
@@ -94,7 +95,8 @@ enum class LipSyncMode : std::uint8_t {
 // reorder or renumber; append new entries at the end only.
 static_assert(static_cast<int>(Provider::OpenAi) == 0 &&
               static_cast<int>(Provider::Gemini) == 1 &&
-              static_cast<int>(Provider::XiaoZhi) == 2,
+              static_cast<int>(Provider::XiaoZhi) == 2 &&
+              static_cast<int>(Provider::Grok) == 3,
               "Provider numbering is a BLE/HTTP/NVS wire contract — append only");
 static_assert(static_cast<int>(OperationMode::MicLipSync) == 0 &&
               static_cast<int>(OperationMode::JttsRandom) == 1 &&
@@ -113,6 +115,7 @@ struct DeviceConfig {
     std::string wifi_password;
     std::string openai_api_key;
     std::string gemini_api_key;
+    std::string xai_api_key;
     // XiaoZhi AI server: full WebSocket endpoint (ws://<host>:8000/xiaozhi/v1/)
     // and optional bearer token. Used only when provider == XiaoZhi; an empty
     // URL disables the conversation task for that provider.

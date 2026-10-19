@@ -2,6 +2,9 @@ English · [中文](README.zh-CN.md) · [日本語](README.ja.md)
 
 # Groki Bot
 
+> This development branch adds standalone xAI Grok Voice over Wi-Fi for M5 StopWatch, with touch interruption. See the [setup and validation notes (Chinese)](docs/stopwatch-grok-voice.zh-CN.md).
+
+
 Everything for the Groki Bot desktop robot (M5Stack CoreS3 with a Stack-chan base) in one repository: the robot **firmware**, the **gateway** that runs on your computer, and the link that lets the robot hand tasks to an agent in the **Grok Bot** app.
 
 ![Groki Bot pixel-art banner: a desktop robot shaped like a retro CRT computer, with a round white face on the screen](docs/images/banner.png)

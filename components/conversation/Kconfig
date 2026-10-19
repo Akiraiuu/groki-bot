@@ -17,6 +17,14 @@ menu "Stackchan Conversation"
         string "OpenAI Realtime voice"
         default "alloy"
 
+    config STACKCHAN_XAI_REALTIME_MODEL
+        string "xAI Grok Voice model"
+        default "grok-voice-latest"
+
+    config STACKCHAN_XAI_VOICE
+        string "xAI Grok Voice voice ID"
+        default "eve"
+
     config STACKCHAN_CONV_WS_RX_BUFFER
         int "WebSocket RX reassembly buffer size (bytes)"
         default 131072

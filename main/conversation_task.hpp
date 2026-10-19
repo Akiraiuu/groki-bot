@@ -25,7 +25,7 @@ struct ConversationTaskArgs {
     SharedState* state;
     ServoLimits limits{};         // per-device servo range for gateway head commands
     const char* api_key;          // API key for the chosen provider; empty disables the task
-    config::Provider provider;    // selects OpenAI Realtime / Gemini Live / XiaoZhi
+    config::Provider provider;    // selects OpenAI Realtime / Gemini Live / XiaoZhi / Grok Voice
     board::Si12tTouch* touch;     // top touch sensor for barge-in; may be null
     // XiaoZhi only: WebSocket endpoint + optional bearer token. For XiaoZhi an
     // empty url (not api_key) disables the task.

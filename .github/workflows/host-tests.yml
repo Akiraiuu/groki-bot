@@ -21,6 +21,57 @@ on:
   workflow_dispatch:
 
 jobs:
+  saved-agent-probe-tests:
+    name: Saved Agent probe tests (${{ matrix.os }})
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install -r tools/stopwatch-agent/requirements.txt
+      - name: Verify protocol harness without real credentials
+        run: python -m unittest discover -s tools/stopwatch-agent -p 'test_*.py' -v
+      - name: Verify Windows Python discovery
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: tools\stopwatch-agent\run-windows.cmd --check-python
+      - name: Package Windows probe (no credentials)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from zipfile import ZipFile, ZIP_DEFLATED
+          import re
+          root = Path('tools/stopwatch-agent')
+          version = re.search(r'^TOOL_VERSION = "([^"]+)"$', (root / 'verify_agent.py').read_text(encoding='utf-8'), re.M).group(1)
+          names = ('verify_agent.py', 'requirements.txt', 'run-windows.cmd',
+                   'README.zh-CN.md', 'test_verify_agent.py', '.gitignore')
+          with ZipFile('StopWatch-Agent-P1-Windows.zip', 'w', ZIP_DEFLATED) as bundle:
+              for name in names:
+                  data = (root / name).read_bytes()
+                  if name.endswith('.cmd'):
+                      data = data.replace(b'\r\n', b'\n').replace(b'\n', b'\r\n')
+                  bundle.writestr('StopWatch-Agent-P1-v' + version + '/' + name, data)
+          PY
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'Windows'
+        with:
+          name: stopwatch-agent-p1-windows
+          path: StopWatch-Agent-P1-Windows.zip
+          retention-days: 14
+      - name: Upload main-script-only update
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: stopwatch-agent-script-only
+          path: tools/stopwatch-agent/verify_agent.py
+          retention-days: 14
+
   host-tests:
     name: Host unit tests (gcc)
     runs-on: ubuntu-latest
@@ -36,7 +87,7 @@ jobs:
       - name: Install build tooling
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends cmake g++ ninja-build
+          sudo apt-get install -y --no-install-recommends cmake g++ ninja-build libmbedtls-dev
 
       - name: Show toolchain versions
         run: |

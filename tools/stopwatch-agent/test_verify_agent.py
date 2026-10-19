@@ -10,6 +10,9 @@ from unittest.mock import AsyncMock, patch
 import wave
 
 import httpx
+from websockets.datastructures import Headers
+from websockets.exceptions import InvalidStatus
+from websockets.http11 import Response
 
 import verify_agent as probe
 
@@ -64,6 +67,62 @@ class Socket:
 
 
 class AgentProbeTests(unittest.IsolatedAsyncioTestCase):
+    def test_http_400_retains_selected_reason_without_credentials(self):
+        body = {"error": {"code": "invalid_request", "type": "request_error",
+                          "message": "Invalid agent_private; key=private-key Bearer short-token",
+                          "request_headers": {"Authorization": "secret-ignored"}}}
+        error = InvalidStatus(Response(400, "Bad Request", Headers({"Content-Type": "application/json"}),
+                                       body=bytearray(json.dumps(body).encode())))
+        result = probe.classify_error(error, probe.Redactor("private-key", "short-token", "agent_private"))
+        self.assertEqual((result["stage"], result["code"]), ("websocket", "http_400"))
+        self.assertEqual(result["http_response"]["code"], "invalid_request")
+        self.assertIn("Invalid", result["http_response"]["message"])
+        for secret in ("private-key", "short-token", "agent_private", "secret-ignored", "request_headers"):
+            self.assertNotIn(secret, json.dumps(result))
+
+    def test_http_plaintext_sanitizes_urls_credentials_and_controls(self):
+        message = ("Bad request\nAuthorization: Basic tiny\nCookie: tiny-cookie\n"
+                   "https://user:password@example.test/?agent_id=agent_private "
+                   "xai-unknownkey sk-unknownkey password=private-password "
+                   "\x1b[31mreason\x00")
+        response = Response(400, "Bad Request", Headers({"Content-Type": "text/plain"}), body=message.encode())
+        result = probe.http_rejection_details(response, probe.Redactor())
+        self.assertEqual(result["body_kind"], "text")
+        for secret in ("Basic tiny", "tiny-cookie", "user:password", "agent_private",
+                       "xai-unknownkey", "sk-unknownkey", "private-password", "\x1b", "\x00"):
+            self.assertNotIn(secret, result["message"])
+
+    def test_http_framework_detail_is_supported_without_dumping_other_fields(self):
+        response = Response(400, "Bad Request", Headers({"Content-Type": "application/json"}),
+                            body=b'{"detail":"Invalid request","input":"private-key"}')
+        details = probe.http_rejection_details(response, probe.Redactor("private-key"))
+        self.assertEqual(details["message"], "Invalid request")
+        self.assertNotIn("private-key", json.dumps(details))
+
+    def test_http_html_oversize_and_unavailable_bodies_are_not_dumped(self):
+        for ctype, body, expected in (
+            ("text/html", b"<html>private-secret</html>", "html_omitted"),
+            ("application/json", b"x" * 5000, "oversize_omitted"),
+            ("application/json", b"", "unavailable"),
+            ("application/json", b"not json private-secret", "non_json_omitted"),
+        ):
+            result = probe.http_rejection_details(
+                Response(400, "Bad Request", Headers({"Content-Type": ctype}), body=body), probe.Redactor())
+            self.assertEqual(result["body_kind"], expected)
+            self.assertNotIn("private-secret", json.dumps(result))
+
+    async def test_handshake_rejection_stops_before_any_session_request(self):
+        error = InvalidStatus(Response(400, "Bad Request", Headers({"Content-Type": "application/json"}),
+                                       body=b'{"error":{"message":"Invalid request private-key"}}'))
+        args = argparse.Namespace(timeout=5, rounds=1, play=False, cancel_probe=False, session_only=True)
+        result = {"connected": False, "protocol_ok": False, "turns": []}
+        with patch("websockets.asyncio.client.connect", side_effect=error) as connect, patch("builtins.print"):
+            await probe.probe_mode("key", "private-key", probe.agent_url("agent_example"), args,
+                                   Path("."), probe.Redactor("private-key"), result)
+        self.assertEqual(connect.call_count, 1)
+        self.assertFalse(result["connected"])
+        self.assertEqual(result["event_counts"], {})
+        self.assertEqual(result["error"]["http_response"]["message"], "Invalid request [REDACTED]")
     async def test_token_request_schema_and_auth_are_server_side(self):
         def handler(request):
             self.assertEqual(str(request.url), probe.TOKEN_URL)
@@ -311,7 +370,7 @@ class AgentProbeTests(unittest.IsolatedAsyncioTestCase):
                     probe, "issue_token", AsyncMock(return_value="short-token")), patch("builtins.print"):
                 self.assertEqual(await probe.run(args, "private-key", "agent_example"), 0)
             report = json.loads(next(Path(directory).rglob("report.json")).read_text(encoding="utf-8"))
-            self.assertEqual(report["tool_version"], "0.3.1")
+            self.assertEqual(report["tool_version"], "0.3.2")
             self.assertEqual(report["output_format"], "not_generated")
             self.assertFalse(list(Path(directory).rglob("*.wav")))
             for mode in ("key", "ephemeral"):

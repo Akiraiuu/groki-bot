@@ -1,12 +1,12 @@
-# StopWatch AI Assistant：电脑端诊断工具 v0.3.1
+# StopWatch AI Assistant：电脑端诊断工具 v0.3.2
 
 目标为完整沿用已发布的 **StopWatch AI Assistant**，最终让设备使用短期令牌直连 xAI。本工具只在电脑上诊断接口，不是固件或云端令牌服务。
 
 ## 这次只做一件事
 
-1. 将**完整新版 ZIP**解压到新文件夹，保留旧文件和 results。不要继续在不同聊天提供的脚本之间反复覆盖。
+1. 已在用 v0.3.1 的用户：下载 `stopwatch-agent-script-only`，解压后只替换原目录的 **verify_agent.py**，保留 `.venv`、`results` 和启动脚本。首次使用则下载完整工具包，解压到新文件夹。
 2. 双击 `run-windows.cmd`。它会优先使用此文件夹已有的 `.venv`，否则尝试 `py`、`python` 创建环境，需要 Python 3.11 或更新版。已安装 Python 的用户不一定需要安装 `py` 启动器。
-3. 确认窗口显示 **`StopWatch Agent 验证工具 0.3.1`**。依次粘贴自己的 xAI API Key、Deployment 的完整 `agent_id`，每次按回车。隐藏输入不显示字符或星号；密钥不发到聊天。
+3. 确认窗口显示 **`StopWatch Agent 验证工具 0.3.2`**。依次粘贴自己的 xAI API Key、Deployment 的完整 `agent_id`，每次按回车。隐藏输入不显示字符或星号；密钥不发到聊天。
 4. 等待 Key 模式完成诊断，打开 `results` 中**本次最新目录**，反馈 `report.json`。不要拿上一版本的报告替代。
 
 双击默认运行的是 `--session-only --auth key`：只建一条 Key 模式会话，连续发送两次相同的音频输出设置并采集返回结构，不发送测试问题，不请求播放回复。建立连接仍可能产生 API 用量。**退出码 0 只表示诊断采集完成，报告的 `protocol_ok=false` 在这种模式下是正常的，不等于对话失败。**
@@ -19,7 +19,7 @@
 
 用户提供的两份真实报告已经证实：Key 和短期令牌都曾连接成功，并收到 `session.created` / `session.updated`；更新响应有旧字段 `output_audio_format`，没有嵌套 format。**旧字段的实际值没有被记录；归档中也没有最新兼容模式失败后的完整报告，所以暂不能认定其根因就是某一种格式。**
 
-v0.3.1 合并已审阅的 V2 修改，并补充：
+v0.3.2 合并已审阅的 V2 修改，并补充：
 
 - 区分缺失、null、字符串、对象；记录已知路径、短音频格式名（排除凭证样式与长串），不保存原始事件。格式名为空也会明确记录，不再一律变成 other。
 - 对明确携带 PCM 编码和 24000 Hz 的旧式对象结构进行确认；矛盾编码、不同采样率、立体声、binary 输出仍停止语音测试。
@@ -34,6 +34,7 @@ v0.3.1 合并已审阅的 V2 修改，并补充：
 | `tool_version` / `script_sha256` | 版本与实际执行脚本指纹 |
 | `test_scope=session_only` | 本次没有执行问答 |
 | `results.*.connected` / `token_issued` | 握手成功 / 短期令牌签发成功；不等于完整 Agent 验收 |
+| `results.*.error.http_response` | HTTP 握手拒绝的响应类型及有限脱敏说明；不保存 HTML 或完整响应 |
 | `results.*.confirmed_audio_evidence` | 第二次响应的音频结构、`legacy_output_audio_format_label` 格式名、嵌套音色是否存在 |
 | `results.*.audio_configured` / `audio_validation` / `audio_error` | 音频是否确认、依据、失败原因 |
 | `results.*.confirmed_config_metadata` | 第二次响应的人设、工具等状态；音色兼容顶层与 audio.output.voice 路径，不含正文 |
@@ -66,7 +67,7 @@ v0.3.1 合并已审阅的 V2 修改，并补充：
 - 请求路径只有 `wss://api.x.ai/v1/realtime?agent_id=<YOUR_AGENT_ID>`，没有 model 参数或自动退回通用 Grok。
 - 只设置输出为 PCM24k、JSON 分片，不覆盖 model / voice / instructions / tools / turn_detection。
 - 长期 Key、短期令牌、Agent ID 仅通过隐藏输入或本机 `XAI_API_KEY` / `XAI_AGENT_ID` 环境变量取得，不写文件或命令行参数。不会创建 `.env` 或监听端口。
-- 不打印原始错误正文、事件、鉴权头、会话 URL 或 traceback。报告含有限音频格式标签、结构证据和配置指纹；已知凭证额外脱敏。
+- 不打印原始错误正文、事件、鉴权头、会话 URL 或 traceback。HTTP 握手错误只保留有限的脱敏 JSON/纯文本说明；过滤 Key、Agent ID、鉴权/Cookie、网址、长串与控制字符；HTML 和大响应不保存。报告另含有限音频标签、结构证据和配置指纹。
 - 对话模式会在终端显示回复，WAV 可能包含个人设置内容，分享前自行检查；results 已从 Git 排除。
 - TLS 校验保留，HTTP 不跟随跳转。客户端自定义函数没有真实处理器时停止，不伪造工具成功。
 
@@ -85,4 +86,8 @@ python -m unittest discover -s . -p 'test_*.py' -v
 
 ## v0.3.0 实测带来的修正
 
-最新真实报告显示：首次更新后人设和工具已经非空，Key 与短期令牌对应指纹一致；之前创建事件的空值不能代表最终配置为空。音色顶层缺失也不能据此断言没加载，需检查嵌套路径。输出格式是未知字符串，被 v0.3.0 过滤成 other，真实格式仍未确定。v0.3.1 修正诊断，不据此宣称音频或完整 Agent 已通过。两种鉴权已重复验证过握手，本次双击只测 Key，减少无必要请求。confirmed 仅指第二次采样，不代表 Agent 配置已经官方确认。
+最新真实报告显示：首次更新后人设和工具已经非空，Key 与短期令牌对应指纹一致；之前创建事件的空值不能代表最终配置为空。音色顶层缺失也不能据此断言没加载，需检查嵌套路径。输出格式是未知字符串，被 v0.3.0 过滤成 other，真实格式仍未确定。v0.3.2 修正诊断，不据此宣称音频或完整 Agent 已通过。两种鉴权已重复验证过握手，本次双击只测 Key，减少无必要请求。confirmed 仅指第二次采样，不代表 Agent 配置已经官方确认。
+
+## v0.3.1 的 HTTP 400 报告
+
+用户最新报告的 Windows 脚本指纹与已发布的 v0.3.1 一致，但连接在 WebSocket HTTP 握手时被 400 拒绝，没有任何会话事件。不能将这次拒绝归因于音频格式或二次设置，也不能仅凭 400 判断是 Key、Agent ID、代理或接口问题。v0.3.2 仅补充脱敏拒绝说明，不改变 URL、鉴权、代理/TLS 或会话请求，不自动重试。用户可以只更新主脚本；若要运行开发者单元测试，需更新完整源码与测试文件。

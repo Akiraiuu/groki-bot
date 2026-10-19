@@ -26,7 +26,7 @@ import wave
 
 TOKEN_URL = "https://api.x.ai/v1/realtime/client_secrets"
 WS_URL = "wss://api.x.ai/v1/realtime"
-TOOL_VERSION = "0.3.1"
+TOOL_VERSION = "0.3.2"
 SAMPLE_RATE = 24000
 MAX_AUDIO_BYTES = SAMPLE_RATE * 2 * 180
 PROMPTS = (
@@ -492,13 +492,74 @@ def write_wav(path, pcm):
         out.writeframes(pcm)
 
 
-def classify_error(error):
+def safe_http_message(value, redactor):
+    """Sanitize a bounded HTTP error description, never a request/response dump."""
+    value = redactor.text(value)
+    value = re.sub(r"(?im)(?:proxy-)?authorization\s*[:=]\s*[^\r\n]+", "[AUTH_REDACTED]", value)
+    value = re.sub(r"(?im)(?:set-)?cookie\s*[:=]\s*[^\r\n]+", "[COOKIE_REDACTED]", value)
+    value = re.sub(r"(?i)\b(?:password|api[_ -]?key|client[_ -]?secret|access[_ -]?token)\s*[:=]\s*\S+",
+                   "[CREDENTIAL_REDACTED]", value)
+    value = re.sub(r"(?i)\bBearer\s+\S+", "Bearer [REDACTED]", value)
+    value = re.sub(r"\b(?:xai-|sk-)[A-Za-z0-9_.-]+", "[KEY_REDACTED]", value)
+    value = re.sub(r"\bagent_[A-Za-z0-9_-]{3,}", "[AGENT_REDACTED]", value)
+    value = re.sub(r"(?i)(?:https?|wss?)://[^\s\"<>]+", "[URL_REDACTED]", value)
+    value = re.sub(r"[A-Za-z0-9_./+=-]{32,}", "[OPAQUE_REDACTED]", value)
+    value = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", value)
+    value = "".join(char if char.isprintable() else " " for char in value)
+    return value[:600]
+
+
+def http_rejection_details(response, redactor):
+    """Only selected error fields; omit HTML, oversized bodies and headers."""
+    headers = getattr(response, "headers", {})
+    try:
+        content_type = headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+    except Exception:
+        content_type = ""
+    details = {"content_type": content_type if content_type in (
+        "application/json", "text/plain", "text/html") else "other_or_missing"}
+    body = getattr(response, "body", None)
+    if not isinstance(body, (bytes, bytearray)) or not body:
+        return {**details, "body_kind": "unavailable"}
+    if len(body) > 4096:
+        return {**details, "body_kind": "oversize_omitted"}
+    text = bytes(body).decode("utf-8", errors="replace").strip()
+    if content_type == "text/html" or re.search(r"(?i)<(?:!doctype|html|head|body)(?:\s|>)", text):
+        return {**details, "body_kind": "html_omitted"}
+    try:
+        data = json.loads(text)
+    except ValueError:
+        if content_type == "text/plain" and "<" not in text and ">" not in text:
+            return {**details, "body_kind": "text", "message": safe_http_message(text, redactor)}
+        return {**details, "body_kind": "non_json_omitted"}
+    details["body_kind"] = "json"
+    if not isinstance(data, dict):
+        return details
+    error = data.get("error", data)
+    if isinstance(error, str):
+        details["message"] = safe_http_message(error, redactor)
+    elif isinstance(error, dict):
+        for field in ("message", "code", "type"):
+            value = error.get(field)
+            if isinstance(value, str):
+                details[field] = safe_http_message(value, redactor)
+            elif type(value) is int and field == "code":
+                details[field] = value
+        if "message" not in details and isinstance(error.get("detail"), str):
+            details["message"] = safe_http_message(error["detail"], redactor)
+    return details
+
+
+def classify_error(error, redactor=None):
     if isinstance(error, ProbeError):
         return {"stage": error.stage, "code": error.code}
     response = getattr(error, "response", None)
     status = getattr(response, "status_code", None)
     if isinstance(status, int):
-        return {"stage": "websocket", "code": f"http_{status}"}
+        result = {"stage": "websocket", "code": f"http_{status}"}
+        if redactor is not None:
+            result["http_response"] = http_rejection_details(response, redactor)
+        return result
     # Exception messages/tracebacks may contain credentials, URLs or headers.
     return {"stage": "transport_or_local_io", "code": type(error).__name__}
 
@@ -555,8 +616,11 @@ async def probe_mode(mode, api_key, url, args, folder, redactor, result):
                     result["cancel_probe"]["following_turn_completed"] = True
             result["protocol_ok"] = True
     except Exception as error:
-        result["error"] = classify_error(error)
+        result["error"] = classify_error(error, redactor)
         print(f"[{mode}] 未通过: {result['error']['stage']} / {result['error']['code']}")
+        rejection = result["error"].get("http_response", {})
+        if rejection.get("message"):
+            print(f"[{mode}] HTTP 拒绝说明（已脱敏）: {rejection['message']}")
     finally:
         result["event_counts"] = dict(counts)
 

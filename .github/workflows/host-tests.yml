@@ -64,6 +64,13 @@ jobs:
           name: stopwatch-agent-p1-windows
           path: StopWatch-Agent-P1-Windows.zip
           retention-days: 14
+      - name: Upload main-script-only update
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: stopwatch-agent-script-only
+          path: tools/stopwatch-agent/verify_agent.py
+          retention-days: 14
 
   host-tests:
     name: Host unit tests (gcc)

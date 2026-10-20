@@ -73,3 +73,15 @@ target_include_directories(conversation_test_realtime_client PRIVATE
 target_compile_definitions(conversation_test_realtime_client PRIVATE CONFIG_STACKCHAN_CONV_WS_RX_BUFFER=131072)
 target_link_libraries(conversation_test_realtime_client PRIVATE cjson_host ${MBEDCRYPTO_LIBRARY})
 add_test(NAME realtime_client COMMAND conversation_test_realtime_client)
+
+add_executable(conversation_test_saved_agent
+    test_saved_agent.cpp
+    ${CONVERSATION_ROOT}/saved_agent.cpp
+    ${CONVERSATION_ROOT}/openai_realtime_client.cpp
+    ${CONVERSATION_ROOT}/base64.cpp)
+target_include_directories(conversation_test_saved_agent PRIVATE
+    stubs ${CONVERSATION_ROOT} ${CONVERSATION_ROOT}/include
+    ${CONVERSATION_ROOT}/../tl_expected/expected/include ${MBEDTLS_INCLUDE_DIR})
+target_compile_definitions(conversation_test_saved_agent PRIVATE CONFIG_STACKCHAN_CONV_WS_RX_BUFFER=131072)
+target_link_libraries(conversation_test_saved_agent PRIVATE cjson_host ${MBEDCRYPTO_LIBRARY})
+add_test(NAME saved_agent COMMAND conversation_test_saved_agent)

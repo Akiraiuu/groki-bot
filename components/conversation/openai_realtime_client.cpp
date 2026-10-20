@@ -8,6 +8,7 @@
 #include <cstring>
 #include <mutex>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 
 #include <cJSON.h>
@@ -25,6 +26,7 @@
 #include "psram_allocator.hpp"
 #include "ws_extra_headers.hpp"
 #include "realtime_session.hpp"
+#include "saved_agent_protocol.hpp"
 
 namespace stackchan::conversation {
 
@@ -38,7 +40,7 @@ constexpr const char* kRealtimeUriPrefix = "wss://api.openai.com/v1/realtime?mod
 // Hot-path scratch sized for this many wire bytes per push_audio chunk.
 // At 8 kHz µ-law a 40 ms chunk is 320 bytes; 1024 leaves headroom for any
 // future change without re-sizing on the hot path.
-constexpr std::size_t kMaxChunkBytes = 1024;
+constexpr std::size_t kMaxChunkBytes = 2048; // includes 40 ms PCM16/24 kHz = 1920 B
 
 // Per-send timeout for the WS write inside the sender task. The mic loop no
 // longer blocks on this — it enqueues into the audio tx ring and returns
@@ -123,6 +125,14 @@ public:
             return tl::unexpected{ConversationError::InvalidState};
         }
         config_ = config;
+        if (!config_.agent_id.empty() && (backend_ != RealtimeBackend::Xai ||
+            !valid_saved_agent_id(config_.agent_id) || config_.input_sample_rate_hz != 24000 ||
+            config_.output_sample_rate_hz != 24000 || api_key_.empty())) {
+            return tl::unexpected{ConversationError::ProtocolError};
+        }
+        saved_confirmations_ = 0;
+        server_web_ = server_x_ = server_file_ = false;
+        custom_tool_names_.clear();
         response_active_.store(false, std::memory_order_relaxed);
         discard_response_.store(false, std::memory_order_relaxed);
         fn_args_.clear();
@@ -143,7 +153,9 @@ public:
         b64_scratch_.assign(b64_cap, '\0');
         json_scratch_.assign(b64_cap + 128, '\0');
 
-        const std::string uri = std::string{backend_ == RealtimeBackend::Xai
+        const std::string uri = !config_.agent_id.empty()
+            ? std::string("wss://api.x.ai/v1/realtime?agent_id=") + config_.agent_id
+            : std::string{backend_ == RealtimeBackend::Xai
                                                 ? "wss://api.x.ai/v1/realtime?model="
                                                 : kRealtimeUriPrefix} + config_.model;
 
@@ -177,7 +189,7 @@ public:
 
         const std::string auth = std::string{"Bearer "} + api_key_;
         esp_websocket_client_append_header(client_, "Authorization", auth.c_str());
-        apply_extra_ws_headers(client_, config_.extra_headers);
+        if (config_.agent_id.empty()) apply_extra_ws_headers(client_, config_.extra_headers);
         // OpenAI Realtime is GA — the OpenAI-Beta: realtime=v1 header is no
         // longer accepted (the server returns "Realtime Beta API is no longer
         // supported").
@@ -239,14 +251,18 @@ public:
         // mic samples at 8 kHz already (see kMicSampleRate in conv-task).
         // Keeping the chunks in PSRAM matters because the queue can hold a
         // few seconds of audio during a network stall.
-        const std::size_t alloc = sizeof(AudioChunk) + pcm.size();
+        const bool raw_pcm = !config_.agent_id.empty();
+        const std::size_t wire_bytes = pcm.size() * (raw_pcm ? sizeof(std::int16_t) : 1);
+        if (wire_bytes > kMaxChunkBytes) return tl::unexpected{ConversationError::ProtocolError};
+        const std::size_t alloc = sizeof(AudioChunk) + wire_bytes;
         auto* chunk = static_cast<AudioChunk*>(
             heap_caps_malloc(alloc, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
         if (chunk == nullptr) {
             return tl::unexpected{ConversationError::OutOfMemory};
         }
-        chunk->len_bytes = static_cast<std::uint16_t>(pcm.size());
-        for (std::size_t i = 0; i < pcm.size(); ++i) {
+        chunk->len_bytes = static_cast<std::uint16_t>(wire_bytes);
+        if (raw_pcm) std::memcpy(chunk->data, pcm.data(), wire_bytes);
+        else for (std::size_t i = 0; i < pcm.size(); ++i) {
             chunk->data[i] = pcm16_to_ulaw(pcm[i]);
         }
 
@@ -647,6 +663,22 @@ private:
 
         if (std::strcmp(type, "session.updated") == 0) {
             ESP_LOGI(kTag, "%s", type);
+            const auto* session = cJSON_GetObjectItemCaseSensitive(root, "session");
+            if (!config_.agent_id.empty()) {
+                update_saved_tools(session);
+                if (++saved_confirmations_ == 1) {
+                    // The first acknowledgment may still contain initialization defaults.
+                    send_session_update();
+                    cJSON_Delete(root);
+                    return;
+                }
+                if (!saved_agent_audio_confirmed(session)) {
+                    set_state(ConversationState::Error);
+                    emit_error(ConversationError::ProtocolError, "saved Agent audio format not confirmed");
+                    cJSON_Delete(root);
+                    return;
+                }
+            }
             if (!session_updated_) {
                 session_updated_ = true;
                 set_state(ConversationState::Listening);
@@ -695,13 +727,23 @@ private:
         } else if (std::strcmp(type, "response.function_call_arguments.delta") == 0) {
             const char* call_id = json_str(root, "call_id");
             const char* delta = json_str(root, "delta");
-            if (call_id != nullptr && delta != nullptr) {
+            if (config_.agent_id.empty() && call_id != nullptr && delta != nullptr) {
                 fn_args_[call_id] += delta;
             }
         } else if (std::strcmp(type, "response.function_call_arguments.done") == 0) {
             handle_function_call_done(root);
         } else if (std::strcmp(type, "response.done") == 0) {
             response_active_.store(false, std::memory_order_relaxed);
+            if (!config_.agent_id.empty()) {
+                const auto* response = cJSON_GetObjectItemCaseSensitive(root, "response");
+                const char* status = json_str(response, "status");
+                if (!status || std::strcmp(status, "completed") != 0) {
+                    set_state(ConversationState::Error);
+                    emit_error(ConversationError::ServerError, "saved Agent response did not complete");
+                    cJSON_Delete(root);
+                    return;
+                }
+            }
             emit_simple(ConversationEventType::ResponseDone);
             if (!pending_tool_call_) {
                 set_state(ConversationState::Listening);
@@ -709,8 +751,9 @@ private:
         } else if (std::strcmp(type, "error") == 0) {
             const cJSON* err = cJSON_GetObjectItemCaseSensitive(root, "error");
             const char* msg = err != nullptr ? json_str(err, "message") : nullptr;
-            ESP_LOGE(kTag, "server error: %s", msg != nullptr ? msg : "(unknown)");
-            emit_error(ConversationError::ServerError, msg != nullptr ? msg : "server error");
+            const char* safe_message = config_.agent_id.empty() && msg ? msg : "realtime server error";
+            ESP_LOGE(kTag, "%s", safe_message);
+            emit_error(ConversationError::ServerError, safe_message);
         } else {
             ESP_LOGD(kTag, "unhandled event: %s", type);
         }
@@ -727,6 +770,10 @@ private:
 
     void handle_audio_delta(const cJSON* root)
     {
+        if (!config_.agent_id.empty() && !session_updated_) {
+            emit_error(ConversationError::ProtocolError, "audio before format confirmation");
+            return;
+        }
         const char* delta = json_str(root, "delta");
         if (delta == nullptr) {
             return;
@@ -737,6 +784,10 @@ private:
             return;
         }
         const auto& bytes = *decoded;
+        if (!output_is_ulaw_ && bytes.size() % 2 != 0) {
+            emit_error(ConversationError::ProtocolError, "odd PCM16 byte count");
+            return;
+        }
         std::shared_ptr<std::vector<std::int16_t>> pcm;
         if (output_is_ulaw_) {
             // G.711 µ-law: one byte per 8 kHz sample, expand to PCM16.
@@ -764,6 +815,12 @@ private:
         const char* call_id = json_str(root, "call_id");
         const char* name = json_str(root, "name");
         const char* arguments = json_str(root, "arguments");
+        if (!config_.agent_id.empty()) {
+            if (name && is_saved_server_tool(name)) return; // server owns execution and results
+            set_state(ConversationState::Error);
+            emit_error(ConversationError::ProtocolError, "saved Agent requested an unsupported client function");
+            return;
+        }
 
         ToolCall call{};
         call.call_id = call_id != nullptr ? call_id : "";
@@ -787,7 +844,40 @@ private:
         emit(ev);
     }
 
+    void update_saved_tools(const cJSON* session) {
+        const auto* tools = cJSON_GetObjectItemCaseSensitive(session, "tools");
+        if (!cJSON_IsArray(tools)) return;
+        server_web_ = server_x_ = server_file_ = false;
+        custom_tool_names_.clear();
+        if (cJSON_GetArraySize(tools) > 64) return; // fail closed on unbounded inventories
+        const cJSON* item;
+        cJSON_ArrayForEach(item, tools) {
+            const char* type = json_str(item, "type");
+            if (!type) continue;
+            if (std::strcmp(type, "web_search") == 0) server_web_ = true;
+            else if (std::strcmp(type, "x_search") == 0) server_x_ = true;
+            else if (std::strcmp(type, "file_search") == 0) server_file_ = true;
+            else if (std::strcmp(type, "function") == 0) {
+                const char* name = json_str(item, "name");
+                if (name && std::strlen(name) <= 128 && custom_tool_names_.size() < 64) custom_tool_names_.insert(name);
+            }
+        }
+    }
+    bool is_saved_server_tool(const char* name) const {
+        if (custom_tool_names_.contains(name)) return false;
+        if (server_web_ && std::strcmp(name, "web_search") == 0 && !custom_tool_names_.contains("web_search")) return true;
+        if (server_file_ && std::strcmp(name, "file_search") == 0 && !custom_tool_names_.contains("file_search")) return true;
+        if (!server_x_ || custom_tool_names_.contains("x_search")) return false;
+        for (const char* native : {"x_search", "x_keyword_search", "x_semantic_search", "x_user_search", "x_thread_fetch"}) {
+            if (std::strcmp(name, native) == 0) return true;
+        }
+        return false;
+    }
+
     // ---- members -----------------------------------------------------------
+    unsigned saved_confirmations_{0};
+    bool server_web_{false}, server_x_{false}, server_file_{false};
+    std::unordered_set<std::string> custom_tool_names_;
 
     std::string api_key_;
     RealtimeBackend backend_;

@@ -115,7 +115,8 @@ struct DeviceConfig {
     std::string wifi_password;
     std::string openai_api_key;
     std::string gemini_api_key;
-    std::string xai_api_key;
+    std::string xai_token_url;
+    std::string xai_device_token; // independent broker credential; never an xAI API key
     // XiaoZhi AI server: full WebSocket endpoint (ws://<host>:8000/xiaozhi/v1/)
     // and optional bearer token. Used only when provider == XiaoZhi; an empty
     // URL disables the conversation task for that provider.

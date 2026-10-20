@@ -14,6 +14,16 @@ inline cJSON* build_realtime_session(const ConversationConfig& config, RealtimeB
     cJSON* root = cJSON_CreateObject();
     cJSON_AddStringToObject(root, "type", "session.update");
     cJSON* session = cJSON_AddObjectToObject(root, "session");
+    if (backend == RealtimeBackend::Xai && !config.agent_id.empty()) {
+        cJSON* audio = cJSON_AddObjectToObject(session, "audio");
+        for (const char* side : {"input", "output"}) {
+            cJSON* io = cJSON_AddObjectToObject(audio, side);
+            cJSON* format = cJSON_AddObjectToObject(io, "format");
+            cJSON_AddStringToObject(format, "type", "audio/pcm");
+            cJSON_AddNumberToObject(format, "rate", 24000);
+        }
+        return root; // Never overwrite the saved Agent's configuration.
+    }
     const bool xai = backend == RealtimeBackend::Xai;
     if (!xai) {
         cJSON_AddStringToObject(session, "type", "realtime");

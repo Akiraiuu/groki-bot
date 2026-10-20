@@ -779,8 +779,8 @@ extern "C" void app_main()
         ESP_LOGI(kTag, "provider=Gemini Live, key=%s",
                  api_key[0] ? "set" : "empty");
     } else if (cfg.provider == stackchan::config::Provider::Grok) {
-        api_key = cfg.xai_api_key.c_str();
-        ESP_LOGI(kTag, "provider=Grok Voice, key=%s", api_key[0] ? "set" : "empty");
+        ESP_LOGI(kTag, "provider=Saved xAI Agent, broker=%s",
+                 cfg.xai_device_token.empty() ? "unconfigured" : "configured");
     } else if (cfg.provider == stackchan::config::Provider::XiaoZhi) {
         // XiaoZhi is keyed by its server URL; the token is optional.
         xiaozhi_url = cfg.xiaozhi_url.c_str();
@@ -803,6 +803,8 @@ extern "C" void app_main()
         .xiaozhi_url = xiaozhi_url, .xiaozhi_token = xiaozhi_token,
         .system_prompt = cfg.system_prompt.c_str(),
         .extra_headers = cfg.conv_extra_headers.c_str(),
+        .xai_token_url = cfg.xai_token_url.c_str(),
+        .xai_device_token = cfg.xai_device_token.c_str(),
         .seg_buf = g_conv_seg_buf};
 #else
     (void)api_key; (void)xiaozhi_url; (void)xiaozhi_token;

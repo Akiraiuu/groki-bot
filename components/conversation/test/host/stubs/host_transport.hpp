@@ -12,6 +12,8 @@ using UBaseType_t = unsigned;
 using BaseType_t = int;
 using TaskHandle_t = void*;
 using esp_event_base_t = const char*;
+using esp_err_t = int;
+constexpr int ESP_FAIL = -1;
 constexpr int pdTRUE = 1, pdPASS = 1, ESP_OK = 0, eDeleted = 0;
 constexpr unsigned MALLOC_CAP_SPIRAM = 1, MALLOC_CAP_8BIT = 2;
 #define pdMS_TO_TICKS(ms) (ms)
@@ -25,7 +27,8 @@ inline std::int64_t esp_timer_get_time() { return 1000000; }
 inline int esp_crt_bundle_attach(void*) { return 0; }
 struct HostQueue { unsigned capacity; std::deque<void*> items; };
 using QueueHandle_t = HostQueue*;
-inline QueueHandle_t xQueueCreate(unsigned n, unsigned) { return new HostQueue{n, {}}; }
+inline QueueHandle_t host_last_queue{};
+inline QueueHandle_t xQueueCreate(unsigned n, unsigned) { host_last_queue = new HostQueue{n, {}}; return host_last_queue; }
 inline int xQueueSend(QueueHandle_t q, void* p, unsigned) {
     if (q->items.size() >= q->capacity) return 0;
     q->items.push_back(*static_cast<void**>(p)); return 1;

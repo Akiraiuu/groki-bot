@@ -1,0 +1,114 @@
+// SPDX-License-Identifier: BSL-1.0
+#include <array>
+#include <cassert>
+#include <ctime>
+#include <cstring>
+#include "host_transport.hpp"
+#include "esp_http_client.h"
+#include "conversation/openai_realtime_client.hpp"
+#include "saved_agent_protocol.hpp"
+
+using namespace stackchan::conversation;
+std::string ticket_json(std::string id = "agent_test_only", double expiry = std::time(nullptr) + 300) {
+    auto* root = cJSON_CreateObject();
+    cJSON_AddNumberToObject(root, "version", 1);
+    cJSON_AddStringToObject(root, "token", "fake-ephemeral-token");
+    cJSON_AddNumberToObject(root, "expires_at", expiry);
+    cJSON_AddStringToObject(root, "agent_id", id.c_str());
+    cJSON_AddStringToObject(root, "websocket_url", ("wss://api.x.ai/v1/realtime?agent_id=" + id).c_str());
+    char* text = cJSON_PrintUnformatted(root);
+    std::string result(text); cJSON_free(text); cJSON_Delete(root); return result;
+}
+const std::string confirmed = R"({"type":"session.updated","session":{"audio":{"input":{"format":{"type":"audio/pcm","rate":24000}},"output":{"format":{"type":"audio/pcm","rate":24000}}},"tools":[{"type":"web_search"},{"type":"x_search"}]}})";
+int main() {
+    auto* audio_event = cJSON_Parse(confirmed.c_str());
+    auto* audio_session = cJSON_GetObjectItemCaseSensitive(audio_event, "session");
+    assert(saved_agent_audio_confirmed(audio_session));
+    auto* input = cJSON_GetObjectItemCaseSensitive(cJSON_GetObjectItemCaseSensitive(audio_session, "audio"), "input");
+    cJSON_AddNumberToObject(input, "channels", 2);
+    assert(!saved_agent_audio_confirmed(audio_session));
+    cJSON_DeleteItemFromObjectCaseSensitive(input, "channels");
+    cJSON_AddStringToObject(input, "transport", "binary");
+    assert(!saved_agent_audio_confirmed(audio_session));
+    cJSON_Delete(audio_event);
+    const auto now = std::time(nullptr);
+    auto json = ticket_json();
+    assert(parse_agent_ticket(json.data(), json.size(), now));
+    for (auto bad : {ticket_json("agent_bad&other=1"), ticket_json("agent_test_only", now - 1), ticket_json("agent_test_only", now + 3600), std::string("{}")}) {
+        assert(!parse_agent_ticket(bad.data(), bad.size(), now));
+    }
+    host_http_body = json;
+    auto ticket = fetch_agent_ticket(kSavedAgentTokenUrl, std::string(43, 'd'));
+    assert(ticket && ticket->agent_id == "agent_test_only");
+    assert(host_http.config.disable_auto_redirect && host_http.config.max_authorization_retries == -1);
+    assert(host_http.config.crt_bundle_attach && host_http.config.timeout_ms == 15000);
+    assert(host_http_authorization == "Bearer " + std::string(43, 'd'));
+    assert(host_http_cleanups == 1);
+    const auto calls = host_http_perform_calls;
+    assert(!fetch_agent_ticket("https://elsewhere.example", std::string(43, 'd')));
+    assert(!fetch_agent_ticket(kSavedAgentTokenUrl, "xai-long-term-key"));
+    assert(host_http_perform_calls == calls);
+    host_http_status = 302;
+    assert(!fetch_agent_ticket(kSavedAgentTokenUrl, std::string(43, 'd')));
+    host_http_status = 200;
+    host_http_body = std::string(9000, 'x');
+    assert(!fetch_agent_ticket(kSavedAgentTokenUrl, std::string(43, 'd')));
+
+    OpenAiRealtimeClient client("fake-ephemeral-token", RealtimeBackend::Xai);
+    std::vector<ConversationEvent> events;
+    client.set_event_callback([&](const auto& e) {events.push_back(e);});
+    ConversationConfig cfg;
+    cfg.agent_id = "agent_test_only";
+    cfg.extra_headers = "Authorization: Bearer must-not-replace-token";
+    assert(client.start(cfg));
+    assert(host_socket->uri == "wss://api.x.ai/v1/realtime?agent_id=agent_test_only");
+    assert(host_socket->headers.at("Authorization") == "Bearer fake-ephemeral-token");
+    host_connected();
+    assert(host_socket->sent.size() == 1);
+    host_receive(R"({"type":"session.updated","session":{}})");
+    assert(client.state() == ConversationState::Connecting && host_socket->sent.size() == 2);
+    host_receive(confirmed);
+    assert(client.state() == ConversationState::Listening);
+    std::array<std::int16_t, 960> pcm{};
+    pcm[0] = 0x1234; pcm[1] = -52;
+    assert(client.push_audio(pcm));
+    void* queued{};
+    assert(xQueueReceive(host_last_queue, &queued, 0));
+    auto* bytes = static_cast<std::uint8_t*>(queued);
+    assert(*static_cast<std::uint16_t*>(queued) == 1920);
+    assert(bytes[2] == 0x34 && bytes[3] == 0x12 && bytes[4] == 0xcc && bytes[5] == 0xff);
+    heap_caps_free(queued);
+    std::array<std::int16_t, 1025> too_large{};
+    assert(!client.push_audio(too_large));
+    for (const char* name : {"web_search", "x_keyword_search", "x_semantic_search", "x_user_search", "x_thread_fetch"}) {
+        const auto count = events.size();
+        host_receive(std::string(R"({"type":"response.function_call_arguments.done","name":")") + name + R"(","call_id":"t","arguments":"{}"})");
+        assert(events.size() == count);
+    }
+    host_receive(R"({"type":"response.created","response":{"id":"r1"}})");
+    host_receive(R"({"type":"response.output_audio.delta","delta":"NBLM/w=="})");
+    assert(events.back().audio && events.back().audio->size() == 2);
+    assert(events.back().audio->at(0) == 0x1234 && events.back().audio->at(1) == -52);
+    host_receive(R"({"type":"response.done","response":{"status":"completed"}})");
+    assert(client.state() == ConversationState::Listening);
+    host_receive(R"({"type":"response.function_call_arguments.done","name":"x_search_arbitrary","call_id":"bad"})");
+    assert(events.back().type == ConversationEventType::Error);
+    client.stop();
+
+    // An explicit same-name client declaration overrides native classification.
+    assert(client.start(cfg)); host_connected(); host_receive(confirmed);
+    auto* root = cJSON_Parse(confirmed.c_str());
+    auto* tools = cJSON_GetObjectItemCaseSensitive(cJSON_GetObjectItemCaseSensitive(root,"session"), "tools");
+    auto* custom = cJSON_CreateObject();
+    cJSON_AddStringToObject(custom,"type","function"); cJSON_AddStringToObject(custom,"name","web_search");
+    cJSON_AddItemToArray(tools,custom);
+    auto* text = cJSON_PrintUnformatted(root);
+    host_receive(text); cJSON_free(text); cJSON_Delete(root);
+    host_receive(R"({"type":"response.function_call_arguments.done","name":"web_search","call_id":"custom"})");
+    assert(events.back().type == ConversationEventType::Error);
+    client.stop();
+    assert(client.start(cfg)); host_connected(); host_receive(confirmed);
+    host_receive(R"({"type":"session.updated","session":{"audio":{"output":{"format":{"type":"audio/pcm","rate":8000}}}}})");
+    assert(client.state() == ConversationState::Error);
+    client.stop();
+}

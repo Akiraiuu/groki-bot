@@ -45,6 +45,8 @@ struct ToolDefinition {
 };
 
 struct ConversationConfig {
+    // Nonempty only for a saved xAI Agent. Persona/voice/tools stay server-side.
+    std::string agent_id;
     std::string instructions; // persona / system prompt
     std::string voice;
     std::string model;

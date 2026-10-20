@@ -29,6 +29,7 @@
 #include "conversation/head_command.hpp"
 #include "conversation/metrics.hpp"
 #include "conversation/openai_realtime_client.hpp"
+#include "conversation/saved_agent.hpp"
 #include "conversation/xiaozhi_client.hpp"
 #include "led_runtime.hpp"
 #include "utf8.hpp"
@@ -219,19 +220,23 @@ class Coordinator {
 public:
     Coordinator(SharedState& state, const char* api_key, config::Provider provider, board::Si12tTouch* touch,
                 const char* xiaozhi_url, const char* xiaozhi_token, const char* system_prompt,
-                const char* extra_headers, const ServoLimits& limits,
+                const char* extra_headers, const char* xai_token_url, const char* xai_device_token, const ServoLimits& limits,
                 const std::array<std::int16_t*, kSegmentBuffers>& seg_buf)
         : state_{state}, api_key_{api_key != nullptr ? api_key : ""}, provider_{provider}, touch_{touch},
           xiaozhi_url_{xiaozhi_url != nullptr ? xiaozhi_url : ""},
           xiaozhi_token_{xiaozhi_token != nullptr ? xiaozhi_token : ""},
           system_prompt_{system_prompt != nullptr ? system_prompt : ""},
-          extra_headers_{extra_headers != nullptr ? extra_headers : ""}, limits_{limits}, seg_buf_{seg_buf} {
+          extra_headers_{extra_headers != nullptr ? extra_headers : ""},
+          xai_token_url_{xai_token_url != nullptr ? xai_token_url : ""},
+          xai_device_token_{xai_device_token != nullptr ? xai_device_token : ""}, limits_{limits}, seg_buf_{seg_buf} {
         // Per-provider audio rates. The OpenAI client further compands its
         // 8 kHz PCM16 into µ-law on the wire; Gemini sends raw PCM16; XiaoZhi
         // streams Opus (16 kHz mono up, server-rate down, resampled to 24 kHz).
         if (provider_ == config::Provider::Gemini || provider_ == config::Provider::XiaoZhi) {
             mic_sample_rate_ = 16000;
             speaker_sample_rate_ = 24000;
+        } else if (provider_ == config::Provider::Grok) {
+            mic_sample_rate_ = speaker_sample_rate_ = 24000;
         } else {
             mic_sample_rate_ = 8000;
             speaker_sample_rate_ = 8000;
@@ -245,7 +250,7 @@ public:
         // XiaoZhi is keyed by its server URL rather than an API key; the other
         // providers need a non-empty api_key.
         const bool disabled = provider_ == config::Provider::XiaoZhi ? xiaozhi_url_.empty()
-                                                                     : api_key_.empty();
+            : provider_ == config::Provider::Grok ? xai_device_token_.empty() : api_key_.empty();
         if (disabled) {
             ESP_LOGW(kTag, "credentials empty for selected provider — conversation disabled");
             vTaskDelete(nullptr);
@@ -390,11 +395,23 @@ private:
     bool connect()
     {
         conv::ConversationConfig cfg{};
+        if (provider_ == config::Provider::Grok) {
+            const auto& broker = xai_token_url_.empty() ? std::string(conv::kSavedAgentTokenUrl) : xai_token_url_;
+            auto ticket = conv::fetch_agent_ticket(broker, xai_device_token_);
+            if (!ticket) {
+                ESP_LOGW(kTag, "saved Agent token request failed (code=%d)", static_cast<int>(ticket.error()));
+                return false;
+            }
+            cfg.agent_id = std::move(ticket->agent_id);
+            // Reconnect always creates a new transport with a freshly issued token.
+            client_ = std::make_unique<conv::OpenAiRealtimeClient>(std::move(ticket->token), conv::RealtimeBackend::Xai);
+            client_->set_event_callback([this](const conv::ConversationEvent& ev) { enqueue_event(ev); });
+        }
         // User-set system prompt (over Wi-Fi) wins; empty falls back to the
         // firmware's built-in persona.
-        cfg.instructions = system_prompt_.empty() ? kInstructions : system_prompt_;
+        if (provider_ != config::Provider::Grok) cfg.instructions = system_prompt_.empty() ? kInstructions : system_prompt_;
         // Extra HTTP headers (e.g. Cloudflare Access token) for the WS upgrade.
-        cfg.extra_headers = extra_headers_;
+        if (provider_ != config::Provider::Grok) cfg.extra_headers = extra_headers_;
         if (provider_ == config::Provider::Gemini) {
             // Gemini Live model + voice. The model is namespaced as
             // "models/..."; the client prepends that for us when missing.
@@ -403,8 +420,7 @@ private:
             cfg.model = "gemini-2.5-flash-native-audio-preview-12-2025";
             cfg.voice = "Aoede"; // pre-built voice name; OK to leave empty
         } else if (provider_ == config::Provider::Grok) {
-            cfg.model = CONFIG_STACKCHAN_XAI_REALTIME_MODEL;
-            cfg.voice = CONFIG_STACKCHAN_XAI_VOICE;
+            // Saved Agent owns its model, voice, persona, tools, and turn detection.
         } else {
             cfg.model = CONFIG_STACKCHAN_OPENAI_REALTIME_MODEL;
             cfg.voice = CONFIG_STACKCHAN_OPENAI_VOICE;
@@ -414,7 +430,7 @@ private:
         // XiaoZhi v1 has no client-side tools — the server owns the persona and
         // drives the avatar's expression via its `llm` emotion messages, which
         // the client maps to AssistantEmotion events.
-        if (provider_ != config::Provider::XiaoZhi) {
+        if (provider_ != config::Provider::XiaoZhi && provider_ != config::Provider::Grok) {
             cfg.tools.push_back(make_set_expression_tool());
             cfg.tools.push_back(make_set_head_pose_tool());
             cfg.tools.push_back(make_speak_katakoto_tool());
@@ -1300,6 +1316,8 @@ private:
     std::string xiaozhi_token_;
     std::string system_prompt_;
     std::string extra_headers_;
+    std::string xai_token_url_;
+    std::string xai_device_token_;
     ServoLimits limits_;
     conv::HeadCommandQueue head_commands_;
     conv::ConversationConfig config_{};
@@ -1369,7 +1387,7 @@ void conversation_task_entry(void* arg)
     auto& args = *static_cast<ConversationTaskArgs*>(arg);
     auto* coordinator = new Coordinator(*args.state, args.api_key, args.provider, args.touch,
                                         args.xiaozhi_url, args.xiaozhi_token, args.system_prompt,
-                                        args.extra_headers, args.limits, args.seg_buf);
+                                        args.extra_headers, args.xai_token_url, args.xai_device_token, args.limits, args.seg_buf);
     coordinator->run();
     // run() only returns by deleting the task; keep the object alive regardless.
     // A task created WithCaps must be deleted WithCaps, or the PSRAM stack is not returned.

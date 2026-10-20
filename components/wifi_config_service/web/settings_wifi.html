@@ -752,9 +752,11 @@
       <label for="gemini-apikey">Gemini API キー</label>
       <input type="password" id="gemini-apikey" maxlength="256" placeholder="AIza… （変更しない場合は空欄）">
 
-      <label for="xai-apikey">xAI Grok Voice API 密钥</label>
-      <input type="password" id="xai-apikey" maxlength="256" placeholder="xai-…（不修改请留空）">
-      <p class="hint" id="xai-key-status">独立使用 xAI API 密钥；保存并重启后通过 Wi-Fi 直连 Grok Voice。开启下方触摸打断后，轻触屏幕可停止回复。</p>
+      <label for="xai-token-url">StopWatch Agent 令牌服务</label>
+      <input type="url" id="xai-token-url" maxlength="256" placeholder="留空使用本项目的云端令牌服务">
+      <label for="xai-device-token">设备访问口令</label>
+      <input type="password" id="xai-device-token" maxlength="128" placeholder="独立设备口令；不是 xAI API Key，不修改请留空">
+      <p class="hint" id="xai-key-status">通过短期令牌连接已发布的 StopWatch Agent。长期 xAI Key 仅保存在云端。</p>
 
       <label for="xiaozhi-url">XiaoZhi サーバー URL</label>
       <input type="text" id="xiaozhi-url" maxlength="256" placeholder="ws://192.168.1.10:8000/xiaozhi/v1/">
@@ -1471,9 +1473,10 @@ async function refresh() {
 
     $('ssid').value = s.ssid || '';
     $('provider').value = String(s.provider ?? 0);
-    $('xai-key-status').textContent = s.has_xai_key
-      ? 'xAI 密钥已保存。留空可保留；开启触摸打断后，轻触屏幕可停止回复。'
-      : '请填写独立的 xAI API 密钥。保存并重启后通过 Wi-Fi 直连 Grok Voice。';
+    $('xai-token-url').value = s.xai_token_url || '';
+    $('xai-key-status').textContent = s.has_xai_device_token
+      ? '设备口令已配置。通过云端短期令牌连接已发布的 Agent；轻触屏幕可停止回复。'
+      : '请配置独立设备访问口令。长期 xAI Key 仅保存在云端。';
     $('openai-enabled').checked = !!s.openai_enabled;
     if (typeof s.operation_mode === 'number') {
       $('operation-mode').value = String(s.operation_mode);
@@ -1578,7 +1581,8 @@ async function apply() {
     const pass = $('password').value;
     const apiKey = $('apikey').value;
     const geminiKey = $('gemini-apikey').value;
-    const xaiKey = $('xai-apikey').value.trim();
+    const xaiUrl = $('xai-token-url').value.trim();
+    const xaiDeviceToken = $('xai-device-token').value.trim();
     const provider = $('provider').value;
     const enabled = $('openai-enabled').checked;
     const rtpEnabled = $('rtp-enabled').checked;
@@ -1593,7 +1597,8 @@ async function apply() {
     if (pass)      { await postText('/api/password', pass);                   log('パスワード送信', 'ok'); }
     if (apiKey)    { await postText('/api/api-key', apiKey);                  log('OpenAI キー送信', 'ok'); }
     if (geminiKey) { await postText('/api/gemini-api-key', geminiKey);        log('Gemini キー送信', 'ok'); }
-    if (xaiKey) { await postText('/api/xai-api-key', xaiKey); log('xAI 密钥已发送', 'ok'); }
+    await postText('/api/xai-token-url', xaiUrl);
+    if (xaiDeviceToken) { await postText('/api/xai-device-token', xaiDeviceToken); log('设备访问口令已发送', 'ok'); }
     const xzUrl = $('xiaozhi-url').value.trim();
     const xzToken = $('xiaozhi-token').value;
     if (xzUrl)     { await postText('/api/xiaozhi-url', xzUrl);               log('XiaoZhi URL 送信', 'ok'); }
@@ -2064,7 +2069,8 @@ refresh();
 // 手書きヒントのように陳腐化しない。BADGE_FIELDS = registry id → 対象コントロールの
 // DOM id。checkbox は toggle-label ごと、input/select はコントロール直後に置く。
 const BADGE_FIELDS = {
-  'ssid':'ssid', 'password':'password', 'provider':'provider', 'xai-api-key':'xai-apikey',
+  'ssid':'ssid', 'password':'password', 'provider':'provider',
+  'xai-token-url':'xai-token-url', 'xai-device-token':'xai-device-token',
   'operation-mode':'operation-mode', 'audio-output':'audio-output',
   'lip-sync-mode':'lip-sync-mode', 'led-mouth-sync':'led-mouth-sync',
   'barge-in':'barge-in-enabled', 'startup-arpeggio':'startup-arpeggio-enabled',

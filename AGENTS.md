@@ -13,3 +13,9 @@ settings save, or Wi-Fi restoration. Offline tests/builds may proceed.
 
 The three previously authorized ephemeral-02.wav uploads are fully consumed;
 further audio uploads or text-only live checks need fresh confirmation.
+
+When live user speech is required, use a dialog with choices. Before connecting,
+wait for an explicit choice confirming readiness and this test's paid scope.
+After listening is ready, also present the speech/done/cancel instructions in a
+dialog. Commentary alone is not a readiness confirmation. A late reply to an
+expired test never authorizes a restart or extra round.

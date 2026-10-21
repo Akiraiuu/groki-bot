@@ -5,10 +5,36 @@
 #include <cstring>
 
 namespace stackchan::conversation {
-enum class PaidVoiceCommand { Invalid, Start, Stop };
+enum class PaidVoiceCommand { Invalid, Start, Stop, LocalRecord };
+inline PaidVoiceCommand parse_local_record_command(const cJSON* root)
+{
+    if (!cJSON_IsObject(root)) return PaidVoiceCommand::Invalid;
+    unsigned op = 0, confirm = 0, seconds = 0, approval = 0;
+    for (auto* v = root->child; v; v = v->next) {
+        if (!v->string) return PaidVoiceCommand::Invalid;
+        if (std::strcmp(v->string, "op") == 0) {
+            ++op;
+            if (!cJSON_IsString(v) || std::strcmp(v->valuestring, "record_local") != 0) return PaidVoiceCommand::Invalid;
+        } else if (std::strcmp(v->string, "confirm_local_recording") == 0) {
+            ++confirm;
+            if (!cJSON_IsTrue(v)) return PaidVoiceCommand::Invalid;
+        } else if (std::strcmp(v->string, "record_seconds") == 0) {
+            ++seconds;
+            if (!cJSON_IsNumber(v) || v->valuedouble != 5) return PaidVoiceCommand::Invalid;
+        } else if (std::strcmp(v->string, "approval_id") == 0) {
+            ++approval;
+            if (!cJSON_IsNumber(v) || v->valuedouble < 1 || v->valuedouble > UINT32_MAX ||
+                static_cast<double>(static_cast<std::uint32_t>(v->valuedouble)) != v->valuedouble) return PaidVoiceCommand::Invalid;
+        } else return PaidVoiceCommand::Invalid;
+    }
+    return op == 1 && confirm == 1 && seconds == 1 && approval == 1 ? PaidVoiceCommand::LocalRecord : PaidVoiceCommand::Invalid;
+}
 inline PaidVoiceCommand parse_paid_voice_command(const cJSON* root)
 {
     if (!cJSON_IsObject(root)) return PaidVoiceCommand::Invalid;
+    const auto* operation = cJSON_GetObjectItemCaseSensitive(root, "op");
+    if (cJSON_IsString(operation) && std::strcmp(operation->valuestring, "record_local") == 0)
+        return parse_local_record_command(root);
     unsigned op = 0, confirm = 0, rounds = 0, seconds = 0, approval = 0;
     bool start = false, stop = false;
     for (auto* v = root->child; v != nullptr; v = v->next) {

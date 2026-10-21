@@ -90,6 +90,26 @@ int main()
     test.set_available(false);
     assert(!test.permitted(300001));
 
+    // Local microphone permission must never open the paid network gate.
+    PaidVoiceTest local;
+    local.set_available(true, 456);
+    assert(local.request_start(true, 0, 456, PaidVoiceTest::Mode::Local));
+    assert(!local.permitted(1));
+    assert(!local.claim(1)); // Paid worker cannot claim local work.
+    assert(local.claim(1, PaidVoiceTest::Mode::Local));
+    assert(local.local_permitted(1));
+    assert(!local.permitted(1));
+    assert(!local.permitted(1, local.snapshot(1).approval_id));
+    assert(!local.request_start(true, 2, local.snapshot(2).approval_id));
+    assert(local.local_permitted(14999));
+    assert(!local.local_permitted(15000));
+    assert(local.snapshot(15000).reason == Reason::Timeout);
+    local.finish();
+    assert(local.request_start(true, 20000, local.snapshot(20000).approval_id, PaidVoiceTest::Mode::Local));
+    local.request_stop();
+    assert(!local.claim(20001, PaidVoiceTest::Mode::Local));
+    assert(!local.permitted(20001));
+
     auto command = [](const char* json) {
         auto* root = cJSON_Parse(json);
         auto result = parse_paid_voice_command(root);
@@ -98,7 +118,13 @@ int main()
     };
     assert(command(R"({"op":"start","confirm_paid":true,"max_rounds":1,"max_seconds":60,"approval_id":1})") == PaidVoiceCommand::Start);
     assert(command(R"({"op":"stop"})") == PaidVoiceCommand::Stop);
+    assert(command(R"({"op":"record_local","confirm_local_recording":true,"record_seconds":5,"approval_id":1})") == PaidVoiceCommand::LocalRecord);
     for (auto json : {"null", "[]", "{}",
+        R"({"op":"record_local","confirm_local_recording":false,"record_seconds":5,"approval_id":1})",
+        R"({"op":"record_local","confirm_local_recording":true,"record_seconds":8,"approval_id":1})",
+        R"({"op":"record_local","confirm_local_recording":true,"record_seconds":5,"approval_id":0})",
+        R"({"op":"record_local","confirm_local_recording":true,"record_seconds":5,"approval_id":1,"confirm_paid":true})",
+        R"({"op":"record_local","op":"start","confirm_local_recording":true,"record_seconds":5,"approval_id":1})",
         R"({"op":"start"})", R"({"op":"start","confirm_paid":"true","max_rounds":1,"max_seconds":60,"approval_id":1})",
         R"({"op":"start","confirm_paid":false,"max_rounds":1,"max_seconds":60,"approval_id":1})",
         R"({"op":"start","confirm_paid":true,"max_rounds":2,"max_seconds":60,"approval_id":1})",

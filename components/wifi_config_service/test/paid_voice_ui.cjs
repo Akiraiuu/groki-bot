@@ -17,7 +17,7 @@ const $ = id => {
 let confirmed = false, confirmations = 0, interval, statusGets = 0, fail = false;
 const posts = [];
 const context = vm.createContext({ $, JSON, Math, Error,
-  window: { confirm(message) { confirmations++; assert(message.includes('付费')); assert(message.includes('60')); return confirmed; } },
+  window: { confirm(message) { confirmations++; assert(message.includes('付费') || message.includes('不调用 API')); return confirmed; } },
   fetchJSON: async path => { assert.equal(path, '/api/voice-test'); statusGets++; return { phase: 'idle', reason: 'none', available: true, remaining_ms: 0, approval_id: 123 }; },
   fetch: async (path, request) => { assert.equal(path, '/api/voice-test'); posts.push(JSON.parse(request.body)); if (fail) throw Error('offline'); return { ok: true }; },
   setInterval: (fn, ms) => { interval = fn; assert.equal(ms, 1000); }
@@ -41,5 +41,14 @@ const context = vm.createContext({ $, JSON, Math, Error,
   await $('btn-voice-test-stop').handler();
   assert.deepEqual(posts[2], { op: 'stop' });
   assert.equal(confirmations, 3); // Stop never asks permission to stop.
+  confirmed = false;
+  await $('btn-local-mic-test').handler();
+  assert.equal(posts.length, 3);
+  confirmed = true;
+  await $('btn-local-mic-test').handler();
+  assert.deepEqual(posts[3], { op: 'record_local', confirm_local_recording: true, record_seconds: 5, approval_id: 123 });
+  assert(!('confirm_paid' in posts[3]));
+  await interval();
+  assert.equal(posts.length, 4); // Neither mode starts on polling.
   console.log('Paid voice UI: load/poll/decline/start/error/stop passed, zero network calls.');
 })().catch(error => { console.error(error); process.exitCode = 1; });

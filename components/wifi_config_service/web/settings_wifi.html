@@ -760,6 +760,7 @@
       <div id="voice-test-panel">
         <p class="hint">付费语音测试：需逐次确认，最多 1 轮、60 秒（含连接等待）。完成、停止或超时即断开，不自动重连；开机和保存设置不会启动测试。</p>
         <button type="button" id="btn-voice-test-start" disabled>确认费用并开始一轮测试</button>
+        <button type="button" id="btn-local-mic-test" disabled>本地录音回放（不联网）</button>
         <button type="button" id="btn-voice-test-stop">停止并结束会话</button>
         <p id="voice-test-status" role="status">未连接</p>
       </div>
@@ -1099,11 +1100,14 @@ async function refreshVoiceTestStatus() {
     const s = await fetchJSON('/api/voice-test');
     voiceApprovalId = s.approval_id;
     const labels = { idle: '未连接', queued: '等待开始', running: '测试中', stopping: '正在断开' };
-    const reasons = { completed: '回复完成', cancelled: '已停止', timeout: '已到时限', error: '发生错误', interrupted: '连接中断' };
+    const reasons = { completed: s.mode === 'local' ? '本地回放完成' : '回复完成', cancelled: '已停止', timeout: '已到时限', error: '发生错误', interrupted: '连接中断' };
     $('voice-test-status').textContent = `${labels[s.phase] || '状态未知'}${s.phase === 'idle' && reasons[s.reason] ? ' · ' + reasons[s.reason] : ''}${s.phase === 'running' || s.phase === 'queued' ? ' · 剩余 ' + Math.ceil(s.remaining_ms / 1000) + ' 秒' : ''}${!s.available ? ' · 请保存为 Grok 对话模式后重启' : ''}`;
     $('btn-voice-test-start').disabled = !s.available || s.phase !== 'idle';
+    $('btn-local-mic-test').disabled = !s.available || s.phase !== 'idle';
+    if (s.mode === 'local' && s.phase !== 'idle') $('voice-test-status').textContent = '本地录音回放，不上传、不调用 API · 剩余 ' + Math.ceil(s.remaining_ms / 1000) + ' 秒';
   } catch (_) {
     $('btn-voice-test-start').disabled = true;
+    $('btn-local-mic-test').disabled = true;
     $('voice-test-status').textContent = '无法确认设备状态；未启动测试';
   }
 }
@@ -1120,6 +1124,21 @@ $('btn-voice-test-start').addEventListener('click', async () => {
     $('voice-test-status').textContent = '已确认本次费用，正在开始测试';
   } catch (e) {
     $('voice-test-status').textContent = '启动结果未确认，请点“停止并结束会话”并检查设备；不会自动重试';
+  } finally { voiceTestBusy = false; }
+});
+$('btn-local-mic-test').addEventListener('click', async () => {
+  if (voiceTestBusy) return;
+  const approvalId = voiceApprovalId;
+  if (!window.confirm('本地检查：麦克风开启约 8 秒（含 3 秒预热倒计时），随后回放最后 5 秒。\n看到“请说话”后说“介绍一下自己”。录音仅在设备内存中，结束即清除，不上传、不调用 API、无 API 费用。\n现在已准备好开始吗？')) return;
+  voiceTestBusy = true;
+  $('btn-local-mic-test').disabled = true;
+  $('btn-voice-test-start').disabled = true;
+  try {
+    const r = await fetch('/api/voice-test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ op: 'record_local', confirm_local_recording: true, record_seconds: 5, approval_id: approvalId }) });
+    if (!r.ok) throw new Error('local_record_failed');
+    $('voice-test-status').textContent = '本地倒计时开始，请看设备提示；不会连接云端';
+  } catch (_) {
+    $('voice-test-status').textContent = '本地检查启动未确认；可点停止，不会自动重试';
   } finally { voiceTestBusy = false; }
 });
 $('btn-voice-test-stop').addEventListener('click', async () => {

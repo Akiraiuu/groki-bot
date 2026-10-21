@@ -9,6 +9,8 @@ namespace stackchan::conversation {
 class PaidVoiceTest {
 public:
     static constexpr std::int64_t limit_ms = 60'000;
+    static constexpr std::int64_t local_limit_ms = 15'000;
+    enum class Mode { Paid, Local };
     enum class Phase { Idle, Queued, Running, Stopping };
     enum class Reason { None, Completed, Cancelled, Timeout, Error, Interrupted };
     struct Snapshot {
@@ -17,6 +19,7 @@ public:
         bool available;
         std::int64_t remaining_ms;
         std::uint32_t approval_id;
+        Mode mode;
     };
     void set_available(bool value, std::uint32_t seed = 1) {
         std::lock_guard lock{mutex_};
@@ -24,26 +27,32 @@ public:
         if (value) approval_id_ = seed ? seed : 1;
         if (!value && phase_ != Phase::Idle) stop_locked(Reason::Error);
     }
-    bool request_start(bool confirmed, std::int64_t now, std::uint32_t approval_id) {
+    bool request_start(bool confirmed, std::int64_t now, std::uint32_t approval_id, Mode mode = Mode::Paid) {
         std::lock_guard lock{mutex_};
         if (!confirmed || !available_ || phase_ != Phase::Idle || now < 0 || approval_id != approval_id_) return false;
         next_approval_locked();
         phase_ = Phase::Queued;
         reason_ = Reason::None;
-        deadline_ = now + limit_ms;
+        mode_ = mode;
+        deadline_ = now + (mode == Mode::Paid ? limit_ms : local_limit_ms);
         return true;
     }
-    bool claim(std::int64_t now) {
+    bool claim(std::int64_t now, Mode mode = Mode::Paid) {
         std::lock_guard lock{mutex_};
         expire_locked(now);
-        if (phase_ != Phase::Queued) return false;
+        if (phase_ != Phase::Queued || mode_ != mode) return false;
         phase_ = Phase::Running;
         return true;
     }
     bool permitted(std::int64_t now, std::uint32_t expected_approval = 0) {
         std::lock_guard lock{mutex_};
         expire_locked(now);
-        return phase_ == Phase::Running && (expected_approval == 0 || expected_approval == approval_id_);
+        return mode_ == Mode::Paid && phase_ == Phase::Running && (expected_approval == 0 || expected_approval == approval_id_);
+    }
+    bool local_permitted(std::int64_t now) {
+        std::lock_guard lock{mutex_};
+        expire_locked(now);
+        return mode_ == Mode::Local && phase_ == Phase::Running;
     }
     void request_stop(Reason why = Reason::Cancelled) {
         std::lock_guard lock{mutex_};
@@ -60,7 +69,7 @@ public:
     Snapshot snapshot(std::int64_t now) {
         std::lock_guard lock{mutex_};
         expire_locked(now);
-        return {phase_, reason_, available_, deadline_ > now ? deadline_ - now : 0, approval_id_};
+        return {phase_, reason_, available_, deadline_ > now ? deadline_ - now : 0, approval_id_, mode_};
     }
 private:
     void next_approval_locked() { if (++approval_id_ == 0) ++approval_id_; }
@@ -76,6 +85,7 @@ private:
     std::mutex mutex_;
     Phase phase_{Phase::Idle};
     Reason reason_{Reason::None};
+    Mode mode_{Mode::Paid};
     bool available_{false};
     std::int64_t deadline_{0};
     std::uint32_t approval_id_{1};

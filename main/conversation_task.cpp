@@ -350,6 +350,99 @@ public:
     }
 
 private:
+    // Entirely local diagnostic. Local permission is NEVER accepted by the
+    // transport's paid permission callback. No connect/token/client call here.
+    void run_local_record_playback()
+    {
+        using Test = conv::PaidVoiceTest;
+        constexpr std::uint32_t rate = 24'000;
+        constexpr std::size_t warmup = rate * 3;
+        constexpr std::size_t total = rate * 8;
+        auto allowed = [&] {
+            if (state_.audio_stream_active.load(std::memory_order_acquire))
+                conv::paid_voice_test.request_stop(Test::Reason::Interrupted);
+            return conv::paid_voice_test.local_permitted(esp_timer_get_time() / 1000);
+        };
+        auto perform = [&] {
+            if (!allowed()) return;
+            assistant_pcm_.assign(total, 0);
+            M5.Speaker.end();
+            M5.Mic.end();
+            vTaskDelay(kI2sSettle);
+            if (!allowed()) return;
+            if (!M5.Mic.record(assistant_pcm_.data(), total, rate, /*stereo=*/false)) {
+                conv::paid_voice_test.request_stop(Test::Reason::Error);
+                return;
+            }
+            // Capture while the ADC settles; replay only the following 5 s.
+            const auto start_us = now_us();
+            int displayed = -1;
+            while (M5.Mic.isRecording() && allowed()) {
+                const auto seconds = static_cast<int>((now_us() - start_us) / 1'000'000);
+                if (seconds != displayed) {
+                    displayed = seconds;
+                    if (seconds < 3) {
+                        const std::string cue = "本地录音倒计时 " + std::to_string(3 - seconds);
+                        state_.set_balloon_text(cue.c_str(), 1500);
+                    } else {
+                        state_.set_balloon_text("请说话：本地录音5秒，不上传", 1500);
+                    }
+                }
+                vTaskDelay(pdMS_TO_TICKS(10));
+            }
+            const auto recorded_us = now_us() - start_us;
+            M5.Mic.end();
+            vTaskDelay(kI2sSettle);
+            if (!allowed()) return;
+            // Fail closed on a driver that returns before filling the buffer.
+            if (recorded_us < 7'500'000) {
+                conv::paid_voice_test.request_stop(Test::Reason::Error);
+                return;
+            }
+            std::uint64_t sum = 0;
+            std::int32_t peak = 0;
+            std::size_t clipped = 0;
+            for (std::size_t i = warmup; i < total; ++i) {
+                const auto value = static_cast<std::int32_t>(assistant_pcm_[i]);
+                sum += static_cast<std::int64_t>(value) * value;
+                peak = std::max(peak, std::abs(value));
+                if (std::abs(value) >= 32760) ++clipped;
+            }
+            ESP_LOGI(kTag, "local mic: rms=%.0f peak=%ld clipped=%u; no upload",
+                     std::sqrt(static_cast<double>(sum) / (total - warmup)),
+                     static_cast<long>(peak), static_cast<unsigned>(clipped));
+            state_.set_balloon_text("正在回放本地录音，不连接云端", 6000);
+            std::size_t pos = warmup, next = 0;
+            while (allowed() && (pos < total || M5.Speaker.isPlaying(kSpeakerChannel))) {
+                while (allowed() && pos < total && M5.Speaker.isPlaying(kSpeakerChannel) < kSegmentBuffers - 1) {
+                    const auto count = std::min(kSegmentSamples, total - pos);
+                    std::memcpy(seg_buf_[next], assistant_pcm_.data() + pos, count * sizeof(std::int16_t));
+                    if (!M5.Speaker.playRaw(seg_buf_[next], count, rate, false, 1, kSpeakerChannel, false)) {
+                        conv::paid_voice_test.request_stop(Test::Reason::Error);
+                        return;
+                    }
+                    pos += count;
+                    next = (next + 1) % kSegmentBuffers;
+                }
+                vTaskDelay(pdMS_TO_TICKS(5));
+            }
+            if (allowed()) conv::paid_voice_test.request_stop(Test::Reason::Completed);
+        };
+        perform();
+        conv::paid_voice_test.request_stop(Test::Reason::Timeout);
+        M5.Mic.end();
+        M5.Speaker.end();
+        // Erase the recording, including the retained vector capacity.
+        std::fill(assistant_pcm_.begin(), assistant_pcm_.end(), 0);
+        assistant_pcm_.clear();
+        for (auto* buffer : seg_buf_) std::fill_n(buffer, kSegmentSamples, 0);
+        state_.conv.status.store(ConvStatus::Disabled, std::memory_order_relaxed);
+        state_.face.mouth_open.store(0.0f, std::memory_order_relaxed);
+        state_.set_balloon_text("本地检查结束，录音已清除，云端未连接", 5000);
+        conv::paid_voice_test.finish();
+        ESP_LOGI(kTag, "local mic playback ended; recording cleared; no cloud connection");
+    }
+
     // Every paid test has one explicit local request, one connection attempt,
     // one reply and a deadline starting at confirmation. Nothing is persisted.
     void run_paid_voice_tests()
@@ -359,6 +452,10 @@ private:
         state_.conv.status.store(ConvStatus::Disabled, std::memory_order_relaxed);
         state_.set_balloon_text("语音未连接，请先确认测试费用", 5000);
         for (;;) {
+            if (conv::paid_voice_test.claim(esp_timer_get_time() / 1000, Test::Mode::Local)) {
+                run_local_record_playback();
+                continue;
+            }
             if (!conv::paid_voice_test.claim(esp_timer_get_time() / 1000)) {
                 if (conv::paid_voice_test.snapshot(esp_timer_get_time() / 1000).phase == Test::Phase::Stopping)
                     conv::paid_voice_test.finish();

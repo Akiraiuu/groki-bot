@@ -42,12 +42,23 @@ inline int xQueueReceive(QueueHandle_t q, void* p, unsigned) {
 }
 inline unsigned uxQueueMessagesWaiting(QueueHandle_t q) { return q->items.size(); }
 inline void vQueueDelete(QueueHandle_t q) { delete q; }
-inline int xTaskCreatePinnedToCoreWithCaps(void(*)(void*), const char*, unsigned,
-                                         void*, unsigned, TaskHandle_t* h, int, unsigned) {
+inline void (*host_pending_task)(void*){};
+inline void* host_pending_task_arg{};
+inline int xTaskCreatePinnedToCoreWithCaps(void(*fn)(void*), const char*, unsigned,
+                                         void* arg, unsigned, TaskHandle_t* h, int, unsigned) {
+    host_pending_task = fn; host_pending_task_arg = arg;
     *h = reinterpret_cast<void*>(1); return pdPASS;
 }
 inline int eTaskGetState(TaskHandle_t) { return eDeleted; }
-inline void vTaskDelay(unsigned) {}
+inline void vTaskDelay(unsigned) {
+    // Tests inspect the TX queue without a racing worker. At teardown the
+    // exit flag is set before the first delay, so run the worker's real exit
+    // path and acknowledgement before its queue/socket may be freed.
+    if (host_pending_task) {
+        auto fn = host_pending_task; host_pending_task = nullptr;
+        fn(host_pending_task_arg);
+    }
+}
 inline void vTaskDeleteWithCaps(void*) {}
 
 struct esp_websocket_client_config_t {

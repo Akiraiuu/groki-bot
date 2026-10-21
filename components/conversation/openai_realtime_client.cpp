@@ -220,6 +220,7 @@ public:
             return tl::unexpected{ConversationError::OutOfMemory};
         }
         sender_should_exit_.store(false, std::memory_order_relaxed);
+        sender_finished_.store(false, std::memory_order_release);
         // Allocate the sender's 6 KiB stack from PSRAM via WithCaps — keeps
         // internal RAM available for mbedtls's transient RSA / AES contexts
         // during TLS handshake (those can be 8-16 KiB each).
@@ -227,6 +228,7 @@ public:
                                             kSenderTaskStack, this, kSenderTaskPrio,
                                             &sender_task_, kSenderTaskCore,
                                             MALLOC_CAP_SPIRAM) != pdPASS) {
+            sender_finished_.store(true, std::memory_order_release);
             teardown();
             return tl::unexpected{ConversationError::TransportInit};
         }
@@ -396,11 +398,11 @@ private:
             sender_should_exit_.store(true, std::memory_order_release);
             AudioChunk* sentinel = nullptr;
             xQueueSend(audio_tx_queue_, &sentinel, 0);
-            // Sender will self-delete; poll briefly for it to exit.
-            for (int i = 0; i < 200; ++i) {
-                if (eTaskGetState(sender_task_) == eDeleted) break;
+            // A WS write can hold the sender for 3s. Never free its queue/client
+            // after an arbitrary 2s wait, or query an already deleted task handle.
+            // The sender acknowledges after its last access to Impl/resources.
+            while (!sender_finished_.load(std::memory_order_acquire))
                 vTaskDelay(pdMS_TO_TICKS(10));
-            }
             sender_task_ = nullptr;
         }
         if (audio_tx_queue_ != nullptr) {
@@ -437,7 +439,9 @@ private:
 
     static void sender_trampoline(void* arg)
     {
-        static_cast<Impl*>(arg)->sender_loop();
+        auto* self = static_cast<Impl*>(arg);
+        self->sender_loop();
+        self->sender_finished_.store(true, std::memory_order_release);
         // Matches xTaskCreatePinnedToCoreWithCaps: frees the PSRAM-resident
         // stack as well as the TCB.
         vTaskDeleteWithCaps(nullptr);
@@ -974,6 +978,7 @@ private:
     std::uint32_t last_evict_log_ms_{0}; // note_tx_eviction rate limiter; 0 = never logged
     TaskHandle_t sender_task_{nullptr};
     std::atomic<bool> sender_should_exit_{false};
+    std::atomic<bool> sender_finished_{true};
 
     // Function-call argument accumulation, keyed by call_id.
     std::unordered_map<std::string, std::string> fn_args_;

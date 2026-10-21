@@ -194,6 +194,7 @@ int main() {
 
     // An explicit same-name client declaration overrides native classification.
     assert(client.start(cfg)); host_connected(); host_receive(confirmed);
+    host_receive(confirmed); // Saved-Agent readiness needs the session.update acknowledgement.
     assert(client.push_audio(pcm)); // Explicit new session resets the input gate.
     assert(xQueueReceive(host_last_queue, &queued, 0));
     heap_caps_free(queued);

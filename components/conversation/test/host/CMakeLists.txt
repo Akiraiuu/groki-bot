@@ -88,7 +88,8 @@ add_test(NAME saved_agent COMMAND conversation_test_saved_agent)
 
 find_package(Threads REQUIRED)
 add_executable(conversation_test_paid_voice_test test_paid_voice_test.cpp)
-target_include_directories(conversation_test_paid_voice_test PRIVATE ${CONVERSATION_ROOT}/include)
+target_include_directories(conversation_test_paid_voice_test PRIVATE
+    ${CONVERSATION_ROOT}/include ${CONVERSATION_ROOT}/../tl_expected/expected/include)
 target_link_libraries(conversation_test_paid_voice_test PRIVATE cjson_host Threads::Threads)
 target_compile_options(conversation_test_paid_voice_test PRIVATE -Wall -Wextra)
 add_test(NAME paid_voice_test COMMAND conversation_test_paid_voice_test)

@@ -5,6 +5,7 @@
 #include <thread>
 #include "conversation/paid_voice_test.hpp"
 #include "conversation/paid_voice_command.hpp"
+#include "conversation/single_turn_input.hpp"
 
 using namespace stackchan::conversation;
 using Phase = PaidVoiceTest::Phase;
@@ -12,6 +13,27 @@ using Reason = PaidVoiceTest::Reason;
 
 int main()
 {
+    SingleTurnInput input;
+    ConversationEvent event{};
+    // Regression: the short VAD noise event immediately after connection had
+    // replaced every subsequent frame with silence before the user could speak.
+    for (auto type : {ConversationEventType::SpeechStarted, ConversationEventType::SpeechStopped,
+                      ConversationEventType::SpeechStarted, ConversationEventType::SpeechStopped}) {
+        event.type = type;
+        input.observe(event);
+        assert(input.open());
+    }
+    event.type = ConversationEventType::UserTranscript;
+    for (auto text : {"", " \r\n\t"}) { event.text = text; input.observe(event); assert(input.open()); }
+    event.text = "Hello, introduce yourself.";
+    input.observe(event);
+    assert(!input.open());
+    event.type = ConversationEventType::SpeechStarted;
+    input.observe(event);
+    assert(!input.open()); // Subsequent VAD cannot open a second utterance.
+    input.reset();
+    assert(input.open()); // Only a new explicitly approved test resets input.
+
     PaidVoiceTest test;
     assert(!test.permitted(0)); // Boot is offline, even with stored credentials.
     assert(!test.request_start(true, 0, 1)); // Coordinator not ready.

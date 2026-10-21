@@ -32,6 +32,7 @@
 #include "conversation/openai_realtime_client.hpp"
 #include "conversation/saved_agent.hpp"
 #include "conversation/paid_voice_test.hpp"
+#include "conversation/single_turn_input.hpp"
 #include "conversation/xiaozhi_client.hpp"
 #include "led_runtime.hpp"
 #include "utf8.hpp"
@@ -364,7 +365,7 @@ private:
                 vTaskDelay(pdMS_TO_TICKS(50));
                 continue;
             }
-            paid_input_closed_ = false;
+            paid_input_.reset();
             state_.set_balloon_text("付费语音测试：1轮，最多60秒", 5000);
             // Wi-Fi wait consumes the same budget. No token is requested yet.
             while (!wifi_is_connected() && conv::paid_voice_test.permitted(esp_timer_get_time() / 1000))
@@ -862,8 +863,8 @@ private:
     {
         if (M5.Mic.isRecording() < 2) {
             auto& buf = mic_buf_[mic_read_];
-            if (provider_ == config::Provider::Grok && paid_input_closed_) {
-                // Keep VAD's silence clock moving after the first utterance,
+            if (provider_ == config::Provider::Grok && !paid_input_.open()) {
+                // Keep VAD's silence clock moving after a recognized utterance,
                 // without letting new room noise create further billable turns.
                 std::fill(buf.begin(), buf.end(), 0);
             }
@@ -1063,6 +1064,7 @@ private:
 
     void handle_event(const conv::ConversationEvent& ev)
     {
+        if (provider_ == config::Provider::Grok) paid_input_.observe(ev);
         switch (ev.type) {
         case conv::ConversationEventType::StateChanged:
             // The protocol reaching Listening for the first time means the
@@ -1106,7 +1108,6 @@ private:
             break;
 
         case conv::ConversationEventType::SpeechStopped:
-            if (provider_ == config::Provider::Grok) paid_input_closed_ = true;
             ESP_LOGI(kTag, "user speech stopped");
             if (local_ == Local::Listening) {
                 set_local(Local::Thinking);
@@ -1469,7 +1470,7 @@ private:
     int mic_read_{0};
     std::uint32_t mic_window_frames_{0}, mic_window_samples_{0}, mic_window_clipped_{0};
     std::size_t mic_settle_samples_{0};
-    bool paid_input_closed_{false};
+    conv::SingleTurnInput paid_input_;
     std::uint32_t mic_window_send_errors_{0}, mic_window_record_errors_{0}, mic_window_since_ms_{0};
     std::int64_t mic_window_energy_{0};
     int mic_window_peak_{0};

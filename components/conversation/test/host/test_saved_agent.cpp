@@ -114,6 +114,15 @@ int main() {
     assert(*static_cast<std::uint16_t*>(queued) == 1920);
     assert(bytes[2] == 0x34 && bytes[3] == 0x12 && bytes[4] == 0xcc && bytes[5] == 0xff);
     heap_caps_free(queued);
+    // speech_stopped must not cut off the saved-Agent input transport while
+    // the server is still finalizing the turn and preparing its audio reply.
+    host_receive(R"({"type":"input_audio_buffer.speech_stopped"})");
+    assert(client.state() == ConversationState::Thinking);
+    assert(client.push_audio(pcm));
+    assert(xQueueReceive(host_last_queue, &queued, 0));
+    assert(*static_cast<std::uint16_t*>(queued) == 1920);
+    heap_caps_free(queued);
+    host_receive(R"({"type":"input_audio_buffer.speech_started"})");
     std::array<std::int16_t, 1025> too_large{};
     assert(!client.push_audio(too_large));
     for (const char* name : {"web_search", "x_keyword_search", "x_semantic_search", "x_user_search", "x_thread_fetch"}) {

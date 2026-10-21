@@ -662,6 +662,11 @@ private:
             service_mic();
             break;
         case Local::Thinking:
+            // Keep the saved-Agent input stream alive through its turn-finalizing
+            // phase. speech_stopped is a boundary notification, not an audio
+            // transport stop command. start_speaking() ends the mic when output
+            // actually arrives, preserving half-duplex playback.
+            if (provider_ == config::Provider::Grok) service_mic();
             if (!thinking_face_released_ && now_ms() - thinking_since_ms_ > kThinkingFaceMs) {
                 thinking_face_released_ = true;
                 state_.set_voice_state(avatar::VoiceState::Idle);
@@ -784,8 +789,33 @@ private:
     {
         if (M5.Mic.isRecording() < 2) {
             const auto& buf = mic_buf_[mic_read_];
-            (void)client_->push_audio(std::span<const std::int16_t>{buf.data(), buf.size()});
-            M5.Mic.record(mic_buf_[mic_read_].data(), mic_buf_[mic_read_].size(), mic_sample_rate_, /*stereo=*/false);
+            const auto pushed = client_->push_audio(std::span<const std::int16_t>{buf.data(), buf.size()});
+            if (provider_ == config::Provider::Grok) {
+                // Numeric-only diagnostics: no recording, transcript or token.
+                ++mic_window_frames_;
+                if (!pushed) ++mic_window_send_errors_;
+                for (const auto sample : buf) {
+                    const int magnitude = sample < 0 ? -static_cast<int>(sample) : sample;
+                    mic_window_peak_ = std::max(mic_window_peak_, magnitude);
+                    mic_window_energy_ += static_cast<std::int64_t>(sample) * sample;
+                    if (magnitude >= 32752) ++mic_window_clipped_;
+                }
+                mic_window_samples_ += buf.size();
+                if (now_ms() - mic_window_since_ms_ >= 2000 && mic_window_samples_ != 0) {
+                    ESP_LOGI(kTag, "mic uplink: frames=%u rms=%u peak=%d clipped=%u send_errors=%u record_errors=%u",
+                             static_cast<unsigned>(mic_window_frames_),
+                             static_cast<unsigned>(std::sqrt(static_cast<double>(mic_window_energy_) / mic_window_samples_)),
+                             mic_window_peak_, static_cast<unsigned>(mic_window_clipped_),
+                             static_cast<unsigned>(mic_window_send_errors_), static_cast<unsigned>(mic_window_record_errors_));
+                    mic_window_frames_ = mic_window_samples_ = mic_window_clipped_ = 0;
+                    mic_window_send_errors_ = mic_window_record_errors_ = 0;
+                    mic_window_peak_ = 0;
+                    mic_window_energy_ = 0;
+                    mic_window_since_ms_ = now_ms();
+                }
+            }
+            if (!M5.Mic.record(mic_buf_[mic_read_].data(), mic_buf_[mic_read_].size(), mic_sample_rate_, /*stereo=*/false)
+                && provider_ == config::Provider::Grok) ++mic_window_record_errors_;
             mic_read_ ^= 1;
         } else {
             vTaskDelay(pdMS_TO_TICKS(5));
@@ -1339,6 +1369,10 @@ private:
 
     std::array<std::vector<std::int16_t>, 2> mic_buf_{};
     int mic_read_{0};
+    std::uint32_t mic_window_frames_{0}, mic_window_samples_{0}, mic_window_clipped_{0};
+    std::uint32_t mic_window_send_errors_{0}, mic_window_record_errors_{0}, mic_window_since_ms_{0};
+    std::int64_t mic_window_energy_{0};
+    int mic_window_peak_{0};
 
     std::vector<std::int16_t> assistant_pcm_;          // reply audio, in PSRAM (grows while streaming)
     bool audio_complete_{false};                       // every AssistantAudioChunk has arrived

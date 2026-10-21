@@ -232,7 +232,9 @@ public:
 
     tl::expected<void, ConversationError> push_audio(std::span<const std::int16_t> pcm)
     {
-        if (state_.load(std::memory_order_relaxed) != ConversationState::Listening) {
+        const auto state = state_.load(std::memory_order_relaxed);
+        const bool saved_agent_waiting = !config_.agent_id.empty() && state == ConversationState::Thinking;
+        if (state != ConversationState::Listening && !saved_agent_waiting) {
             // Not an error: the coordinator may still be draining the mic
             // after speech_stopped. Drop silently.
             ESP_LOGD(kTag, "push_audio dropped (state != Listening)");

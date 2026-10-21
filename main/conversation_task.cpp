@@ -420,7 +420,8 @@ private:
             cfg.model = "gemini-2.5-flash-native-audio-preview-12-2025";
             cfg.voice = "Aoede"; // pre-built voice name; OK to leave empty
         } else if (provider_ == config::Provider::Grok) {
-            // Saved Agent owns its model, voice, persona, tools, and turn detection.
+            // Saved Agent owns its model, voice, persona and tools. The
+            // transport explicitly enables server VAD for automatic replies.
         } else {
             cfg.model = CONFIG_STACKCHAN_OPENAI_REALTIME_MODEL;
             cfg.voice = CONFIG_STACKCHAN_OPENAI_VOICE;

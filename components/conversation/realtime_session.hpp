@@ -15,6 +15,12 @@ inline cJSON* build_realtime_session(const ConversationConfig& config, RealtimeB
     cJSON_AddStringToObject(root, "type", "session.update");
     cJSON* session = cJSON_AddObjectToObject(root, "session");
     if (backend == RealtimeBackend::Xai && !config.agent_id.empty()) {
+        // Saved-Agent WebSocket sessions still need explicit automatic turn
+        // detection. Otherwise audio can report speech_started indefinitely
+        // without speech_stopped or an automatic response. This is a session
+        // transport setting; persona, voice, tools and model remain untouched.
+        cJSON* vad = cJSON_AddObjectToObject(session, "turn_detection");
+        cJSON_AddStringToObject(vad, "type", "server_vad");
         cJSON* audio = cJSON_AddObjectToObject(session, "audio");
         for (const char* side : {"input", "output"}) {
             cJSON* io = cJSON_AddObjectToObject(audio, side);
@@ -22,7 +28,7 @@ inline cJSON* build_realtime_session(const ConversationConfig& config, RealtimeB
             cJSON_AddStringToObject(format, "type", "audio/pcm");
             cJSON_AddNumberToObject(format, "rate", 24000);
         }
-        return root; // Never overwrite the saved Agent's configuration.
+        return root; // Preserve saved persona, voice, model and tools.
     }
     const bool xai = backend == RealtimeBackend::Xai;
     if (!xai) {

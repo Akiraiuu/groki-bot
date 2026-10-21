@@ -79,7 +79,9 @@ int main() {
     cfg.voice = "must not be sent";
     Json saved(build_realtime_session(cfg, RealtimeBackend::Xai), cJSON_Delete);
     s = field(saved.get(), "session");
-    assert(cJSON_GetArraySize(s) == 1); // audio only
-    assert(!field(s, "instructions") && !field(s, "voice") && !field(s, "tools") && !field(s, "model") && !field(s, "turn_detection"));
+    assert(cJSON_GetArraySize(s) == 2); // audio transport + automatic turns
+    assert(!field(s, "instructions") && !field(s, "voice") && !field(s, "tools") && !field(s, "model"));
+    assert(cJSON_GetArraySize(field(s, "turn_detection")) == 1);
+    str(field(s, "turn_detection"), "type", "server_vad");
     assert(field(field(field(field(s, "audio"), "input"), "format"), "rate")->valueint == 24000);
 }

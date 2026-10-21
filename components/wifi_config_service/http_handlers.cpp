@@ -684,1992 +684,1516 @@ esp_err_t handle_startup_arpeggio_post(httpd_req_t* req)
     if (read_body_str(req, body, 8) != ESP_OK) return ESP_OK;
     const bool enabled = !body.empty() && (body[0] == '1' || body[0] == 't' || body[0] == 'y');
     // boot-only 設定: 実行時の反映先は無いが、staging+Apply+再起動を経ずに即永続化する。
-    apply_imme…18786 tokens truncated…e>
-</head>
-<body>
-<div class="card">
-  <h1>🤖 Stack-chan 設定 (Wi-Fi)</h1>
-  <p class="subtitle">HTTP 経由で Wi-Fi と API キーを設定します</p>
-
-  <div id="ap-banner" hidden style="
-       background:#fff3cd;
-       border:1px solid #f0c674;
-       color:#664d03;
-       padding:0.6rem 0.8rem;
-       margin:0 0 0.75rem 0;
-       border-radius:6px;
-       font-size:0.9rem;
-       line-height:1.4;">
-    <strong>⚠ SoftAP プロビジョニング モード</strong> — Wi-Fi <strong>STA が未接続</strong>です。
-    このページは device 自身の AP <code>http://192.168.4.1/</code> 経由で表示されており、
-    <em>認証パスワードは一時的に無効化</em> されています (物理ボタンで AP を有効化
-    した ≒ 本体アクセス済み)。まず「接続」タブで家庭 Wi-Fi の SSID / パスワードを
-    設定 → 保存 &amp; 再起動してください。ファームを更新する場合は、STA 未接続では
-    リリース取得 (device side fetch) が使えないため、「メンテ」タブの
-    <strong>ローカル ファイル アップロード</strong> を使用してください。
-  </div>
-
-  <div class="page-header">
-    <div class="status-bar" style="flex:1 1 auto;margin:0">
-      <span class="dot" id="http-dot"></span>
-      <span id="http-label">状態取得中…</span>
-      <span class="dot" id="wifi-dot" style="margin-left:0.75rem"></span>
-      <span id="wifi-label">Wi-Fi: —</span>
-      <span class="flags">
-        <span class="flag" id="flag-ssid" title="SSID 設定済み">S</span>
-        <span class="flag" id="flag-pass" title="Password 設定済み">P</span>
-        <span class="flag" id="flag-key"  title="OpenAI key 設定済み">K</span>
-        <span class="flag" id="flag-en"   title="OpenAI 有効">O</span>
-        <span class="flag" id="flag-gkey" title="Gemini key 設定済み">G</span>
-        <span class="flag" id="flag-prov" title="Provider = Gemini">P</span>
-      </span>
-    </div>
-    <div id="header-info">
-      <span class="key">FW</span><span class="val" id="hdr-fw">—</span>
-      <span class="key" style="margin-left:0.6rem">Board</span><span class="val" id="hdr-board">—</span>
-    </div>
-    <div class="actions">
-      <button id="btn-refresh" type="button">状態を再取得</button>
-      <button id="btn-apply" type="button">保存 &amp; 再起動</button>
-    </div>
-  </div>
-
-  <p class="instructions">
-    ℹ️ タブを切り替えて設定 → <strong>保存 &amp; 再起動</strong> で確定。
-    接続後、即反映する項目 (アバター DSL / LT) は個別ボタンが付いています。
-  </p>
-
-  <nav class="tabs" role="tablist">
-    <button data-tab="conn"   class="active" role="tab">接続</button>
-    <button data-tab="avatar"             role="tab">アバター</button>
-    <button data-tab="audio"              role="tab">音声</button>
-    <button data-tab="chat"               role="tab">会話</button>
-    <button data-tab="device"             role="tab">デバイス</button>
-    <button data-tab="maint"              role="tab">メンテ</button>
-  </nav>
-
-  <!-- ===== 接続 ===== -->
-  <section class="tab-panel active" data-tab="conn">
-  <div class="device-info" id="device-info">
-    <div class="row"><span class="key">Firmware</span><span class="val" id="dis-fw">—</span></div>
-    <div class="row"><span class="key">ESP-IDF</span><span class="val" id="dis-idf">—</span></div>
-    <div class="row"><span class="key">IP</span><span class="val" id="dis-ip">—</span></div>
-    <div class="row"><span class="key">基板</span><span class="val" id="dis-board">—</span></div>
-    <div class="row" id="dis-battery-row"><span class="key">バッテリー</span><span class="val" id="dis-battery">—</span></div>
-  </div>
-
-  <h2 class="section-title" style="margin-top:0.5rem">動作モード</h2>
-  <p class="hint" style="margin-bottom:0.5rem">
-    Stack-chan の主な振る舞いを 3 つから選びます。「会話応答」は OpenAI / Gemini /
-    XiaoZhi のいずれかで会話、「JTTS ランダム発話」は音声のアイドル発話のみ、
-    「マイクでリップシンク」はマイク入力に合わせて口だけ動かします。
-    保存後の再起動で切替わります。
-  </p>
-  <select id="operation-mode">
-    <option value="2">会話応答 (Conversation)</option>
-    <option value="1">JTTS ランダム発話 (JttsRandom)</option>
-    <option value="0">マイクでリップシンク (MicLipSync)</option>
-  </select>
-
-  <label for="ssid">Wi-Fi SSID</label>
-  <input type="text" id="ssid" maxlength="32" placeholder="MyNetwork">
-  <p class="hint">空欄のままにすると現在の値を変更しません</p>
-
-  <label for="password">Wi-Fi パスワード</label>
-  <input type="password" id="password" maxlength="64" placeholder="（変更しない場合は空欄）">
-
-  <h2 class="section-title" style="margin-top:0.5rem">デバイス名 (BLE / mDNS)</h2>
-  <p class="hint" style="margin-bottom:0.5rem">
-    BLE アドバタイズ名と mDNS ホスト名のもとになります。空欄なら自動生成 (Stackchan-XXXXXX)。
-    mDNS は英数字とハイフンに丸められます。保存後の再起動で反映。
-  </p>
-  <label for="device-name">デバイス名</label>
-  <input type="text" id="device-name" maxlength="24" placeholder="（空欄で自動）">
-
-  <h2 class="section-title" style="margin-top:0.5rem">パスワード認証</h2>
-  <p class="hint" style="margin-bottom:0.5rem">
-    設定すると、この設定ページ (WiFi) と BLE の両方で認証が必要になります。
-    空欄を保存すると認証なし (現状互換) に戻ります。HTTP は Basic Auth（即時反映・
-    再起動不要）、BLE は暗号鍵に混入されるため次回接続時に反映。
-  </p>
-  <label for="auth-password">パスワード <span id="auth-password-state" class="hint" style="font-weight:normal"></span></label>
-  <div style="display:flex;gap:0.4rem;align-items:stretch">
-    <input type="password" id="auth-password" maxlength="64" placeholder="（変更しない場合は空欄）" style="flex:1 1 auto">
-    <button type="button" id="btn-auth-password-clear" class="danger" title="認証なしに戻す">クリア</button>
-  </div>
-  </section><!-- /tab-panel "conn" -->
-
-  <!-- ===== アバター ===== -->
-  <section class="tab-panel" data-tab="avatar">
-    <div id="avatar-dsl-section">
-      <h2 class="section-title">顔描画 DSL (Avatar)</h2>
-      <p class="hint" style="margin-bottom:0.5rem">
-        アバターの顔の描画ロジックを Lua 風 DSL で書いて、ブラウザ内でバイトコード化
-        → 実機に送信して即時反映します。NVS に保存されるので再起動後も維持。
-        <a href="/avatar_dsl.html" target="_blank" rel="noopener" style="white-space:nowrap">文法ガイド</a>
-        ／
-        <a href="https://github.com/sefuzhou770801-hub/groki-bot/blob/main/assets/default_face.avdsl"
-           target="_blank" rel="noopener" style="white-space:nowrap">デフォルト顔ソース</a>
-      </p>
-      <textarea id="dsl-src" spellcheck="false" autocomplete="off"
-                autocapitalize="off" autocorrect="off"></textarea>
-      <div id="dsl-msg">DSL コンパイラ未起動</div>
-      <div class="dsl-btnrow">
-        <button type="button" class="primary" id="btn-dsl-send">コンパイル &amp; 送信</button>
-        <select id="dsl-preset" class="secondary" title="プリセットを選ぶとソースを読込んで実機に送信"
-                style="flex:1 1 auto;padding:.45rem;font-size:.85rem;background:#e0e0e0;
-                       color:#333;border:1px solid #bbb;border-radius:6px;cursor:pointer">
-        </select>
-        <button type="button" class="danger" id="btn-dsl-reset">実機をデフォルトに戻す</button>
-      </div>
-      <div class="dsl-btnrow">
-        <button type="button" class="secondary" id="btn-dsl-download">.avbc ダウンロード</button>
-        <button type="button" class="secondary" id="btn-dsl-download-src">.avdsl ダウンロード</button>
-        <label class="filebtn" for="dsl-load">.avdsl 読込</label>
-        <input type="file" id="dsl-load" accept=".avdsl,text/plain" style="display:none">
-      </div>
-    </div>
-  </section><!-- /tab-panel "avatar" -->
-
-  <!-- ===== 音声 ===== -->
-  <section class="tab-panel" data-tab="audio">
-    <div id="speaker-volume-section">
-      <h2 class="section-title">スピーカー音量</h2>
-      <p class="hint" style="margin-bottom:0.5rem">
-        内蔵 / Module Audio / Atomic Echo Base すべての出力に効きます。
-        スライダーを動かすと <strong>即時反映</strong> + 自動保存 (再起動不要)。
-        100% = ボード ごとの工場既定値、200% でブースト。
-      </p>
-      <label for="speaker-volume">音量 <span id="speaker-volume-value">100</span> %</label>
-      <input type="range" id="speaker-volume" min="0" max="200" step="5" value="100" style="width:100%">
-    </div>
-
-    <div id="jtts-say-section">
-      <h2 class="section-title">jtts 試し発話</h2>
-      <p class="hint" style="margin-bottom:0.5rem">
-        ひらがな / カタカナで入力して「話す」ボタンを押すと jtts で読み上げます。
-        漢字や英字は変換されないので、フリガナを直接入力してください。
-        音量や音声出力の確認に便利。
-      </p>
-      <input type="text" id="jtts-say-text" maxlength="64" placeholder="（例）こんにちは すたっくちゃん です">
-      <button type="button" id="btn-jtts-say" class="primary" style="margin-top:0.5rem">話す</button>
-    </div>
-
-    <div id="audio-output-section">
-      <h2 class="section-title">音声出力</h2>
-      <p class="hint" style="margin-bottom:0.5rem">
-        音声の出力先を選びます。「自動」は M5 Module Audio が装着されていれば
-        そちらを優先、未装着なら内蔵スピーカ。「内蔵」と「Module Audio」は
-        強制指定 (Module Audio 未装着で「Module Audio」を選ぶと内蔵に
-        フォールバックします)。保存後の再起動で切替わります。
-      </p>
-      <select id="audio-output">
-        <option value="0">自動 (Auto)</option>
-        <option value="1">内蔵スピーカ (Internal)</option>
-        <option value="2">M5 Module Audio (ModuleAudio)</option>
-      </select>
-    </div>
-
-    <div id="rtp-section">
-      <h2 class="section-title">Wi-Fi RTP 音声受信</h2>
-      <label class="toggle-label" for="rtp-enabled">
-        <input type="checkbox" id="rtp-enabled" checked>
-        <span>RTP 音声受信を有効にする</span>
-      </label>
-      <p class="hint">Wi-Fi 経由の RTP 音声受信(L16/μ-law=udp/6970, AAC=udp/6972)。会話機能オン時は自動的に無効です</p>
-      <p class="hint" style="margin-top:0.3rem">送信例 (ffmpeg)。ブラウザは UDP を送れないのでコピー用:</p>
-      <code id="rtp-audio-cmd" style="display:block;font-size:0.72rem;word-break:break-all;white-space:pre-wrap;user-select:all;background:#f4f4f4;padding:0.4rem;border-radius:4px"></code>
-    </div>
-
-    <div id="jtts-section">
-      <h2 class="section-title">アイドル時の声 (jtts)</h2>
-      <!-- Hidden legacy toggle — operation_mode == JttsRandom is the real
-           switch now. Kept in the DOM so the refresh/apply JS keeps working. -->
-      <label class="toggle-label" for="jtts-idle-enabled" style="display:none">
-        <input type="checkbox" id="jtts-idle-enabled" checked>
-        <span>アイドル時の発話を有効にする</span>
-      </label>
-
-      <h2 class="section-title">マイク リップシンク 調整 (会話・jtts どちらもオフのとき有効)</h2>
-      <p class="hint" style="margin-bottom:0.5rem">マイク入力の音量に合わせて口を開閉します。CoreS3 はマイク感度が低めなので入力ゲインを上げると見栄えします。スライダーを動かすと <strong>即時反映</strong> + 自動保存します。</p>
-      <div class="grid2">
-        <div style="grid-column:span 2">
-          <label for="mic-lip-input">入力ゲイン <span id="mic-lip-input-value">200</span> %</label>
-          <input type="range" id="mic-lip-input" min="10" max="1000" step="10" value="200" style="width:100%">
-        </div>
-        <div style="grid-column:span 2">
-          <label for="mic-lip-output">口の開き ゲイン <span id="mic-lip-output-value">100</span> %</label>
-          <input type="range" id="mic-lip-output" min="10" max="500" step="10" value="100" style="width:100%">
-        </div>
-      </div>
-      <label class="toggle-label" for="mic-lip-agc" style="margin-top:0.5rem">
-        <input type="checkbox" id="mic-lip-agc">
-        <span>自動ゲイン制御 (AGC) を有効にする</span>
-      </label>
-      <p class="hint">周辺の雑音レベルを自動追跡して感度を調整します。OFF にすると固定閾値で判定。即時反映（再起動不要）。</p>
-
-      <h2 class="section-title" style="margin-top:1rem">jtts ボイス</h2>
-      <p class="hint" style="margin-bottom:0.5rem">空欄や変更なしで「保存」を押すと現在の設定は維持されます。</p>
-
-      <label for="jtts-voice">声タイプ</label>
-      <select id="jtts-voice">
-        <option value="female">Female (子供っぽい)</option>
-        <option value="male">Male (低め)</option>
-      </select>
-
-      <label for="jtts-synth">合成方式</label>
-      <select id="jtts-synth">
-        <option value="v2">標準 (v2 — 声門波 + カスケード)</option>
-        <option value="classic">クラシック (旧方式 — ブザー声)</option>
-      </select>
-
-      <label for="jtts-engine">エンジン</label>
-      <select id="jtts-engine">
-        <option value="auto">自動 (HMM ボイス &gt; 音声 DB &gt; フォルマント)</option>
-        <option value="hmm">HMM 合成 (ボイス必須、無ければフォールバック)</option>
-        <option value="unit">単位連結 (DB 必須、無ければフォルマント)</option>
-        <option value="formant">フォルマント合成のみ</option>
-      </select>
-
-      <label for="jtts-halftone">HMM ピッチシフト [半音]</label>
-      <input type="number" id="jtts-halftone" min="-12" max="12" step="0.5" placeholder="0">
-
-      <h2 class="section-title" style="margin-top:1rem">HMM ボイス (.htsvoice)</h2>
-      <p class="hint" style="margin-bottom:0.5rem">
-        HTS ボイス (.htsvoice、~1-2 MB) をアップロードすると jtts の発話が
-        HMM 合成になります (16 MB flash ボードのみ)。読みに
-        <code>'</code> (アクセント核) と <code>/</code> (アクセント句切り) を
-        書けます。CC BY のボイス例: Mei / tohoku-f01 / nitech m001。
-        反映は即時、flash 保存で再起動後も有効。
-      </p>
-      <p class="hint" id="hmm-voice-status" style="margin-bottom:0.5rem">状態: —</p>
-
-      <h3 style="margin:0.5rem 0 0.25rem;font-size:0.95rem">サーバーから取得</h3>
-      <p class="hint" style="margin:0 0 0.4rem">
-        配布ボイスをブラウザがダウンロードしてデバイスへ転送・インストールします
-        (PC にファイルを用意する必要なし。ブラウザ側にインターネット接続が必要)。
-      </p>
-      <div style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center">
-        <select id="hmm-voice-catalog" style="flex:1 1 12rem"><option value="">— 取得中… —</option></select>
-        <button type="button" id="btn-hmm-voice-fetch">取得してインストール</button>
-      </div>
-      <p class="hint" id="hmm-voice-fetch-status" style="margin:0.35rem 0 0" hidden></p>
-      <p class="hint" id="hmm-voice-attribution" style="margin:0.35rem 0 0;font-size:0.8rem;color:#777"></p>
-      <p class="hint" style="margin:0.35rem 0 0;font-size:0.8rem">
-        音声エンジン (hts_engine, Modified BSD) と配布ボイスの帰属表示:
-        <a href="https://sefuzhou770801-hub.github.io/groki-bot/licenses.html" target="_blank" rel="noopener">ライセンス / 帰属表示</a>
-      </p>
-
-      <h3 style="margin:0.8rem 0 0.25rem;font-size:0.95rem">ファイルからアップロード</h3>
-      <p class="hint" style="margin:0 0 0.4rem">
-        任意の HTS ボイス (.htsvoice、~1-2 MB)。読みに <code>'</code>
-        (アクセント核) と <code>/</code> (アクセント句切り) を書けます。
-      </p>
-      <div style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center">
-        <input type="file" id="hmm-voice-file" accept=".htsvoice,application/octet-stream" style="flex:1 1 12rem">
-        <button type="button" id="btn-hmm-voice-upload">アップロード</button>
-        <button type="button" id="btn-hmm-voice-clear" class="danger">削除</button>
-      </div>
-
-      <h2 class="section-title" style="margin-top:1rem">単位連結 音声 DB (.jvox)</h2>
-      <p class="hint" style="margin-bottom:0.5rem">
-        実音声由来のモーラ単位 DB をアップロードすると、jtts の発話が単位連結
-        (TD-PSOLA) 合成になります。<code>tools/jvox/</code> のツールで生成した
-        .jvox (ADPCM 版推奨、~230 KB)。反映は即時、NVS 保存で再起動後も有効。
-      </p>
-      <p class="hint" id="voice-db-status" style="margin-bottom:0.5rem">状態: —</p>
-      <div style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center">
-        <input type="file" id="voice-db-file" accept=".jvox,application/octet-stream" style="flex:1 1 12rem">
-        <button type="button" id="btn-voice-db-upload">アップロード</button>
-        <button type="button" id="btn-voice-db-clear" class="danger">削除</button>
-      </div>
-
-      <div class="grid2">
-        <div>
-          <label for="jtts-f0">ピッチ F0 (Hz)</label>
-          <input type="number" id="jtts-f0" min="60" max="500" step="1" placeholder="280">
-        </div>
-        <div>
-          <label for="jtts-formant">フォルマント倍率</label>
-          <input type="number" id="jtts-formant" min="0.5" max="2.0" step="0.05" placeholder="1.30">
-        </div>
-        <div>
-          <label for="jtts-mora">モーラ長 (ms)</label>
-          <input type="number" id="jtts-mora" min="40" max="300" step="5" placeholder="120">
-        </div>
-        <div>
-          <label for="jtts-gain">音量 (gain)</label>
-          <input type="number" id="jtts-gain" min="0" max="2" step="0.05" placeholder="0.60">
-        </div>
-        <div>
-          <label for="jtts-breath">息成分 (breathiness)</label>
-          <input type="number" id="jtts-breath" min="0" max="1" step="0.05" placeholder="0.00">
-        </div>
-        <div>
-          <label for="jtts-vibrate">ビブラート rate (Hz)</label>
-          <input type="number" id="jtts-vibrate" min="0" max="10" step="0.1" placeholder="0">
-        </div>
-        <div>
-          <label for="jtts-vibratoc">ビブラート depth (cents)</label>
-          <input type="number" id="jtts-vibratoc" min="0" max="200" step="1" placeholder="0">
-        </div>
-        <div>
-          <label for="jtts-oq">声門開大比 (やわらかさ)</label>
-          <input type="number" id="jtts-oq" min="0.35" max="0.85" step="0.01" placeholder="0.56">
-        </div>
-        <div>
-          <label for="jtts-tilt">高域減衰 tilt (dB)</label>
-          <input type="number" id="jtts-tilt" min="0" max="24" step="1" placeholder="0">
-        </div>
-        <div>
-          <label for="jtts-bwscale">帯域幅倍率 (鳴き抑え)</label>
-          <input type="number" id="jtts-bwscale" min="0.7" max="2.0" step="0.05" placeholder="1.00">
-        </div>
-      </div>
-      <p class="hint" style="margin-top:0.25rem">
-        やわらかめの目安: 開大比 0.65–0.75 / tilt 6–12 dB / 帯域幅 1.2–1.5
-        (+息成分 0.1–0.25)。いずれも v2 方式で有効 (帯域幅はクラシックでも有効)。</p>
-
-      <label for="jtts-phrases" style="margin-top:0.75rem">アイドル時の発話フレーズ (一行 1 つ)</label>
-      <p class="hint" style="margin:0.2rem 0">
-        <code>画面表示 | 読み</code> の形式。読みはひらがな/カタカナのみ (漢字は発声時に
-        無視されます)。<code>|</code> を省くと表示と読みが同じになります。
-        例: <code>こんにちは | こんにちわ</code></p>
-      <textarea id="jtts-phrases" rows="6" placeholder="こんにちは | こんにちわ&#10;おはよー&#10;..."></textarea>
-    </div>
-    <div id="lt-section">
-      <h2 class="section-title">LT タイムキーパー</h2>
-      <p class="hint">本体の「LT」タブで開始/停止。ここでは既定時間と通知ワードを設定します（保存しなくても送信で即反映、保存で再起動後も保持）。読みはひらがな（jtts は漢字を読めません）</p>
-      <div class="grid2">
-        <div>
-          <label for="lt-total">発表時間 (秒)</label>
-          <input type="number" id="lt-total" min="30" max="3600" step="30" placeholder="300">
-        </div>
-        <div>
-          <label for="lt-warn">残り通知 (終了の何秒前)</label>
-          <input type="number" id="lt-warn" min="10" max="600" step="10" placeholder="60">
-        </div>
-      </div>
-      <div class="grid2">
-        <div>
-          <label for="lt-soon">直前通知 (秒前、0=無効)</label>
-          <input type="number" id="lt-soon" min="0" max="120" step="5" placeholder="15">
-        </div>
-        <div>
-          <label for="lt-repeat">超過の繰返し間隔 (秒、0=1回のみ)</label>
-          <input type="number" id="lt-repeat" min="0" max="300" step="5" placeholder="30">
-        </div>
-      </div>
-      <label for="lt-warn-text">残り通知 表示テキスト</label>
-      <input id="lt-warn-text" placeholder="のこり1分です">
-      <label for="lt-warn-reading">残り通知 読み (ひらがな)</label>
-      <input id="lt-warn-reading" placeholder="のこり いっぷん です">
-      <label for="lt-soon-text">直前通知 表示テキスト</label>
-      <input id="lt-soon-text" placeholder="のこり15秒です">
-      <label for="lt-soon-reading">直前通知 読み (ひらがな)</label>
-      <input id="lt-soon-reading" placeholder="のこり じゅうごびょう です">
-      <label for="lt-just-text">時間ちょうど 表示テキスト</label>
-      <input id="lt-just-text" placeholder="（空欄なら超過と同じ）">
-      <label for="lt-just-reading">時間ちょうど 読み (ひらがな)</label>
-      <input id="lt-just-reading" placeholder="（空欄なら超過と同じ）">
-      <label for="lt-over-text">超過 表示テキスト</label>
-      <input id="lt-over-text" placeholder="時間です!">
-      <label for="lt-over-reading">超過 読み (ひらがな)</label>
-      <input id="lt-over-reading" placeholder="おじかん です">
-      <button type="button" id="btn-lt-send" style="margin-top:0.5rem">LT 設定を送信 (即反映)</button>
-    </div>
-  </section><!-- /tab-panel "audio" -->
-
-  <!-- ===== 会話 ===== -->
-  <section class="tab-panel" data-tab="chat">
-    <div id="chat-section">
-      <h2 class="section-title">会話プロバイダ・API キー</h2>
-      <label for="provider">会話プロバイダ</label>
-      <select id="provider">
-        <option value="0">OpenAI Realtime</option>
-        <option value="1">Google Gemini Live</option>
-        <option value="2">XiaoZhi サーバー</option>
-        <option value="3">xAI Grok Voice</option>
-      </select>
-      <p class="hint">どの会話バックエンドを使うかを切り替えます。キー / 設定は下記すべてに保存できます。</p>
-
-      <label for="apikey">OpenAI API キー</label>
-      <input type="password" id="apikey" maxlength="256" placeholder="sk-… （変更しない場合は空欄）">
-
-      <label for="gemini-apikey">Gemini API キー</label>
-      <input type="password" id="gemini-apikey" maxlength="256" placeholder="AIza… （変更しない場合は空欄）">
-
-      <label for="xai-token-url">StopWatch Agent 令牌服务</label>
-      <input type="url" id="xai-token-url" maxlength="256" placeholder="留空使用本项目的云端令牌服务">
-      <label for="xai-device-token">设备访问口令</label>
-      <input type="password" id="xai-device-token" maxlength="128" placeholder="独立设备口令；不是 xAI API Key，不修改请留空">
-      <p class="hint" id="xai-key-status">通过短期令牌连接已发布的 StopWatch Agent。长期 xAI Key 仅保存在云端。</p>
-      <div id="voice-test-panel">
-        <p class="hint">付费语音测试：需逐次确认，最多 1 轮、60 秒（含连接等待）。完成、停止或超时即断开，不自动重连；开机和保存设置不会启动测试。</p>
-        <button type="button" id="btn-voice-test-start" disabled>确认费用并开始一轮测试</button>
-        <button type="button" id="btn-local-mic-test" disabled>本地录音回放（不联网）</button>
-        <button type="button" id="btn-voice-test-stop">停止并结束会话</button>
-        <p id="voice-test-status" role="status">未连接</p>
-      </div>
-
-      <label for="xiaozhi-url">XiaoZhi サーバー URL</label>
-      <input type="text" id="xiaozhi-url" maxlength="256" placeholder="ws://192.168.1.10:8000/xiaozhi/v1/">
-
-      <label for="xiaozhi-token">XiaoZhi トークン</label>
-      <input type="password" id="xiaozhi-token" maxlength="256" placeholder="（任意 / 変更しない場合は空欄）">
-
-      <label for="system-prompt">システムプロンプト (会話の人格)</label>
-      <textarea id="system-prompt" rows="6" maxlength="2048"
-                style="width:100%;box-sizing:border-box;font-size:0.8rem;padding:0.4rem;border:1px solid #ccc;border-radius:4px;white-space:pre-wrap"
-                placeholder="空欄にすると組み込みの既定プロンプトを使用します"></textarea>
-      <p class="hint">OpenAI / Gemini / Grok の会話に使う指示文。XiaoZhi はサーバー側の人格を使うため無視されます。保存後の再起動で反映されます。</p>
-
-      <label for="conv-headers">追加 HTTP ヘッダ (会話 API)</label>
-      <textarea id="conv-headers" rows="3" maxlength="1024"
-                style="width:100%;box-sizing:border-box;font-size:0.8rem;padding:0.4rem;border:1px solid #ccc;border-radius:4px;white-space:pre-wrap;font-family:monospace"
-                placeholder="CF-Access-Client-Id: xxxxx.access&#10;CF-Access-Client-Secret: yyyyy"></textarea>
-      <p class="hint">会話 API への WebSocket 接続に付与する追加ヘッダ。1 行 1 つ「ヘッダ名: 値」。Cloudflare Access のサービストークン等に使用。全プロバイダ共通。保存後の再起動で反映されます。</p>
-
-      <!-- Hidden legacy toggle — operation_mode (selectable in 接続 tab) is
-           the real switch now. Kept in the DOM so the refresh/apply JS
-           keeps working. -->
-      <label class="toggle-label" for="openai-enabled" style="display:none">
-        <input type="checkbox" id="openai-enabled" checked>
-        <span>会話機能を有効にする</span>
-      </label>
-
-      <h2 class="section-title">タッチ操作</h2>
-      <label class="toggle-label" for="barge-in-enabled">
-        <input type="checkbox" id="barge-in-enabled">
-        <span>頭タッチで会話を中断する (バージイン)</span>
-      </label>
-      <p class="hint">応答再生中にアバター画面 (頭) をタップで AI 応答を中断します。タッチ センサが敏感で誤動作しやすいので、初期値はオフです。なでなで (前→中→後の連続タッチ) は本トグルとは独立で常に有効です。即時反映（再起動不要）。</p>
-    </div>
-  </section><!-- /tab-panel "chat" -->
-
-  <!-- ===== デバイス ===== -->
-  <section class="tab-panel" data-tab="device">
-    <div id="device-toggles-section">
-      <h2 class="section-title">デバイス機能の有効/無効</h2>
-      <label class="toggle-label" for="bat-gauge-enabled">
-        <input type="checkbox" id="bat-gauge-enabled" checked>
-        <span>バッテリー残量ゲージを表示する</span>
-      </label>
-      <p class="hint">アバター画面の左上に残量ゲージを表示します（保存後の再起動で反映）</p>
-
-      <label class="toggle-label" for="startup-arpeggio-enabled" style="margin-top:1rem">
-        <input type="checkbox" id="startup-arpeggio-enabled" checked>
-        <span>起動時のアルペジオを再生する</span>
-      </label>
-      <p class="hint">起動直後の C5–E5–G5（スピーカー動作確認音）を鳴らすかどうか。OFF にすると無音起動（設定は即時保存・音自体は次回起動時）</p>
-
-      <label class="toggle-label" for="servo-enabled" style="margin-top:1rem">
-        <input type="checkbox" id="servo-enabled" checked>
-        <span>サーボを有効にする</span>
-      </label>
-      <p class="hint">無効にするとサーボ電源を入れず、サーボタスクも起動しません（保存後の再起動で反映）。操作画面の脱力/復帰トグルとは別物で、こちらは NVS に永続化されます。</p>
-
-      <label class="toggle-label" for="led-mouth-sync" style="margin-top:1rem">
-        <input type="checkbox" id="led-mouth-sync">
-        <span>ネコミミ LED を口の動きと連動させる</span>
-      </label>
-      <p class="hint">アバターの口が開くと LED が反応します (会話再生・jtts 発話・マイク リップシンク いずれの口元アニメーションでも有効)。OFF のときは設定した明るさで固定。即時反映（再起動不要）。</p>
-
-      <label for="lip-sync-mode" style="margin-top:0.5rem">リップシンク モード</label>
-      <p class="hint" style="margin-bottom:0.5rem">
-        ON のときの制御方式を選びます。「輝度」は口が開くほど LED 全体が明るくなる
-        従来動作。「レベル メーター」はネコミミの三角形 (LED1 = 底辺、LED5 = 頂点)
-        を 5 段階のバー グラフとして点灯させます。保存後の再起動で反映されます。
-      </p>
-      <select id="lip-sync-mode">
-        <option value="0">輝度 (Brightness)</option>
-        <option value="1">レベル メーター (LevelMeter)</option>
-      </select>
-    </div>
-
-    <div id="camera-section" style="display:none">
-      <h2 class="section-title">カメラ (テスト撮影)</h2>
-      <p class="hint" style="margin-bottom:0.5rem">
-        本体前面の GC0308 カメラで 1 枚撮影して表示します (640×480 カラー)。
-        露出安定化のため撮影に 1 秒ほどかかります。QR スキャン実行中は使えません。
-        「RAW 撮影」は ISP (AWB・色変換) をバイパスした Bayer モザイク (RGGB) を取得し、
-        「カラーバー」はセンサー内蔵テストパターンで転送経路を検証します。
-      </p>
-      <div class="ota-row">
-        <button id="btn-camera-capture" type="button" disabled>撮影</button>
-        <button id="btn-camera-raw" type="button" disabled>RAW 撮影</button>
-        <button id="btn-camera-colorbar" type="button" disabled>カラーバー</button>
-        <button id="btn-camera-save" type="button" disabled>PNG 保存</button>
-        <button id="btn-camera-save-raw" type="button" disabled>RAW 保存 (.pgm)</button>
-      </div>
-      <canvas id="camera-canvas" width="320" height="240"
-              style="width:100%; max-width:640px; background:#222; border-radius:6px;
-                     margin-top:0.5rem; display:block"></canvas>
-      <p class="hint" id="camera-msg" style="margin-top:0.25rem"></p>
-      <details style="margin-top:0.5rem">
-        <summary class="hint">センサー レジスタ (色調整用)</summary>
-        <div class="ota-row" style="margin-top:0.4rem">
-          <label>page <input id="camera-reg-page" type="text" value="0" size="4"></label>
-          <label>reg <input id="camera-reg-addr" type="text" value="0x24" size="6"></label>
-          <label>value <input id="camera-reg-value" type="text" value="" size="6"></label>
-          <button id="btn-camera-reg-read" type="button" disabled>読取</button>
-          <button id="btn-camera-reg-write" type="button" disabled>書込</button>
-        </div>
-        <p class="hint">0x プレフィクス可。書込はセンサー再起動まで有効 (NVS 保存なし)。</p>
-      </details>
-    </div>
-
-    <div id="servo-section">
-      <h2 class="section-title">サーボ原点・可動範囲 (Takao base 等の自作版向け)</h2>
-      <p class="hint" style="margin-bottom:0.5rem">
-        サーボの取り付け向きや可動範囲はベース基板で異なります。原点(0..1023)と可動範囲(度)を
-        設定して「保存して再起動」で反映してください。既定は M5 base の値です。
-      </p>
-      <div class="grid2">
-        <div><label for="sv-yaw-zero">Yaw 原点 (raw)</label>
-          <input type="number" id="sv-yaw-zero" min="0" max="1023" step="1" placeholder="460"></div>
-        <div></div>
-        <div><label for="sv-yaw-min">Yaw 最小 (°)</label>
-          <input type="number" id="sv-yaw-min" min="-90" max="90" step="1" placeholder="-40"></div>
-        <div><label for="sv-yaw-max">Yaw 最大 (°)</label>
-          <input type="number" id="sv-yaw-max" min="-90" max="90" step="1" placeholder="40"></div>
-        <div><label for="sv-pitch-zero">Pitch 原点 (raw)</label>
-          <input type="number" id="sv-pitch-zero" min="0" max="1023" step="1" placeholder="620"></div>
-        <div></div>
-        <div><label for="sv-pitch-min">Pitch 最小 (°)</label>
-          <input type="number" id="sv-pitch-min" min="-90" max="90" step="1" placeholder="-10"></div>
-        <div><label for="sv-pitch-max">Pitch 最大 (°)</label>
-          <input type="number" id="sv-pitch-max" min="-90" max="90" step="1" placeholder="25"></div>
-      </div>
-      <div id="sv-range-area" style="margin-top:0.8rem;padding-top:0.6rem;border-top:1px dashed #555">
-        <p class="hint" style="margin-bottom:0.5rem">
-          範囲設定モードを ON にするとサーボの力が抜け、手で動かした位置を取り込めます。
-          中央位置で「Yaw 原点取込」、左端で「Yaw 最小取込」、右端で「Yaw 最大取込」を順にタップしてください。
-          取り込んだ値は上の入力欄に反映されます。最後に「保存 &amp; 再起動」で確定します。
-        </p>
-        <div style="display:flex;align-items:center;gap:0.6rem;flex-wrap:wrap">
-          <button type="button" id="sv-range-mode">範囲設定モード: OFF</button>
-          <span class="hint" id="sv-live-pos">Yaw: -- (--°)   Pitch: -- (--°)</span>
-        </div>
-        <div style="margin-top:0.4rem;display:flex;flex-wrap:wrap;gap:0.3rem">
-          <button type="button" id="sv-cap-yaw-zero" disabled>Yaw 原点取込</button>
-          <button type="button" id="sv-cap-yaw-min"  disabled>Yaw 最小取込</button>
-          <button type="button" id="sv-cap-yaw-max"  disabled>Yaw 最大取込</button>
-          <button type="button" id="sv-cap-pitch-zero" disabled>Pitch 原点取込</button>
-          <button type="button" id="sv-cap-pitch-min"  disabled>Pitch 最小取込</button>
-          <button type="button" id="sv-cap-pitch-max"  disabled>Pitch 最大取込</button>
-        </div>
-      </div>
-    </div>
-  </section><!-- /tab-panel "device" -->
-
-  <!-- ===== メンテ ===== -->
-  <section class="tab-panel" data-tab="maint">
-    <div id="mcp-section">
-      <h2 class="section-title">Claude Code Channel (MCP)</h2>
-      <p class="hint" id="mcp-token-status">トークン: <span id="mcp-token-state">—</span></p>
-      <label for="mcp-token">MCP API トークン (空欄なら変更しない / 値が入っているなら上書き、空文字列に揃えるには「クリア」)</label>
-      <input type="password" id="mcp-token" autocomplete="off" placeholder="(変更しないなら空欄)">
-      <div style="display:flex;gap:0.4rem;margin-top:0.3rem">
-        <button type="button" id="btn-mcp-token-gen">ランダム生成</button>
-        <button type="button" id="btn-mcp-token-show">表示</button>
-        <button type="button" id="btn-mcp-token-clear">クリア</button>
-      </div>
-      <p class="hint">設定されていれば <code>/mcp/*</code> が有効化（adapter から接続可）。空にすると <code>/mcp/*</code> は 404 を返します（即時反映・再起動不要）</p>
-    </div>
-
-    <div id="ota-section">
-      <h2 class="section-title">ファームウェア更新 (OTA)</h2>
-      <p class="hint" style="margin-bottom:0.5rem">
-        ローカルの <code>firmware.bin</code> を選んで「書き込み」を押すと、新ファームを
-        別パーティションに書き込んで再起動します。Wi-Fi 経由は BLE より大幅に高速です。
-      </p>
-      <details style="margin:0.5rem 0; font-size:0.85rem; color:#444">
-        <summary style="cursor:pointer; color:#06c">最新の release をローカル ファイルで書き込む手順 (iPhone / AP モードでも可)</summary>
-        <ol style="margin:0.5rem 0 0.5rem 1.2rem; padding:0">
-          <li>Safari で
-            <a href="https://sefuzhou770801-hub.github.io/groki-bot/" target="_blank" rel="noopener">
-              sefuzhou770801-hub.github.io/groki-bot
-            </a>
-            を開く。<br>
-            <span style="color:#888">(AP モードで Wi-Fi がインターネットに繋がっていなくても、iOS は
-            セルラーへ自動 fallback します。繋がらない場合は一度 Wi-Fi を切ってからやり直してください。)</span>
-          </li>
-          <li>該当ボードの <code>firmware-vX.Y.Z-&lt;board&gt;.zip</code> をダウンロード</li>
-          <li>「ファイル」App で ZIP をタップして展開 → 中の
-            <code>stackchan_idf.bin</code> が OTA ペイロード本体</li>
-          <li>(AP モードの場合) device の AP に Wi-Fi 接続し、このページを再度開く</li>
-          <li>上の「ファイル選択」で <code>stackchan_idf.bin</code> を選び「書き込み」</li>
-        </ol>
-        <p class="hint" style="margin:0.25rem 0 0 0; font-size:0.8rem">
-          ※ <code>firmware-vX.Y.Z-&lt;board&gt;.bin</code> ではなく
-          <code>stackchan_idf.bin</code> の方を選んでください。前者はブートローダ+
-          パーティション+アプリの結合イメージ (USB 初回書き込み用) で OTA には使えません。
-        </p>
-      </details>
-      <p id="ota-android-cpl-note" hidden
-         style="margin:0.5rem 0; font-size:0.85rem; color:#664d03;
-                background:#fff3cd; border:1px solid #ffe69c;
-                padding:0.5rem 0.7rem; border-radius:6px; line-height:1.4">
-        ⚠ <strong>Android で「ファイル選択」が反応しない場合</strong>:
-        <ol style="margin:0.4rem 0 0 0; padding-left:1.2rem">
-          <li>この画面が「ネットワークにログイン」ミニブラウザ
-            (CaptivePortalLogin) で開いている場合、ファイル選択は動作しません。</li>
-          <li>右上の <strong>⋮ メニュー →「このネットワークをこのまま使用」</strong>
-            を選択してください (Stackchan AP への接続が維持されます)。</li>
-          <li><strong>Chrome</strong> を開いて
-            <code>http://192.168.4.1/</code> にアクセスし、そちらで
-            ファイル選択・OTA を実行してください。</li>
-        </ol>
-        <span style="display:block; margin-top:0.4rem">
-          ※ Android が「インターネット接続がありません」と表示しても、
-          接続は維持したままにしてください。元の Wi-Fi に自動で戻って
-          しまう場合は、Wi-Fi 設定で Stackchan AP を選び直してください。
-        </span>
-      </p>
-      <div class="ota-row">
-        <input type="file" id="ota-file" accept=".bin">
-        <button id="btn-ota" type="button" disabled>書き込み</button>
-      </div>
-
-      <h3 class="section-title" style="margin-top:1rem; font-size:0.95rem">
-        release から直接取得 (device side fetch)
-      </h3>
-      <p class="hint" style="margin-bottom:0.5rem">
-        device が <code>STA</code> 経由で GitHub Pages から自分宛のビルドを取得し
-        OTA 適用します。AP モード中でも STA がアップであれば動作 (APSTA)。STA が
-        ダウンの場合はエラーになるので、上の「ローカル ファイル」を使ってください。
-      </p>
-      <div class="ota-row">
-        <select id="ota-release-select"
-                style="flex:1; padding:0.4rem; font-family:monospace; font-size:0.9rem">
-          <option value="">— tag 一覧を読込中 —</option>
-        </select>
-        <input type="text" id="ota-release-tag" placeholder="v0.7.3"
-               style="flex:0 0 8rem; padding:0.4rem; font-family:monospace; font-size:0.9rem">
-        <button id="btn-ota-release" type="button" disabled>release を適用</button>
-      </div>
-      <p class="hint" style="margin:0.25rem 0 0 0; font-size:0.8rem">
-        ドロップダウンで選ぶと右のテキスト欄に反映されます。手入力も可 (未来の
-        tag / 特殊 build)。ボード判定 (cores3 / atoms3r / atoms3 / stopwatch) は
-        device 側で自動。進捗は下の status バーに反映されます。
-      </p>
-      <p id="ota-release-ap-note" hidden
-         style="margin:0.5rem 0 0 0; font-size:0.85rem; color:#664d03;
-                background:#fff3cd; border:1px solid #ffe69c;
-                padding:0.5rem 0.7rem; border-radius:6px; line-height:1.4">
-        ⚠ AP モード (STA 未接続) 中はリリース取得できません。上の「ローカル
-        ファイル アップロード」を使用してください。
-      </p>
-
-      <div class="ota-status" id="ota-status">
-        <div class="ota-bar"><div class="ota-bar-fill" id="ota-bar-fill"></div></div>
-        <div class="ota-stats" id="ota-stats">未開始</div>
-      </div>
-    </div>
-  </section><!-- /tab-panel "maint" -->
-
-  <div class="log" id="log"></div>
-
-  <p class="compat-note">
-    Wi-Fi 経由設定。家庭 LAN 上の他端末から API キーを盗聴される可能性があるので、
-    信頼できないネットワークでは BLE 版の設定ツールを使ってください。
-  </p>
-</div>
-
-<!-- DSL compiler bundle (lexer/parser/emitter/compile/opcodes from
-     tools/avatar_dsl/), concatenated into an IIFE that hangs the public API
-     on window.AvatarDsl. Injected at firmware build time by
-     tools/avatar_dsl/inject.mjs (see components/wifi_config_service/CMakeLists.txt).
-     Placed BEFORE the main page script so window.AvatarDsl is defined when
-     setupDslEditor() runs. -->
-<script>/*{{AVATAR_DSL_BUNDLE}}*/</script>
-<!-- DSL source presets array [{name, source}, ...] inlined at build time
-     (see tools/avatar_dsl/inject.mjs). The first entry is the textarea's
-     initial value. AVATAR_DSL_DEFAULT_SOURCE is a back-compat alias for
-     the same source. -->
-<script>
-  window.AVATAR_DSL_PRESETS = "{{AVATAR_DSL_PRESETS}}";
-  window.AVATAR_DSL_DEFAULT_SOURCE = "{{AVATAR_DSL_DEFAULT_SOURCE}}";
-</script>
-<!-- Transport-agnostic helpers (log panel / tab bar / board facts) shared
-     with the BLE settings page. tools/settings_common.js is inlined here at
-     firmware build time by tools/avatar_dsl/inject.mjs — this page must
-     stay a single embeddable file. -->
-<script>/*{{SETTINGS_COMMON}}*/</script>
-
-<script>
-const $ = (id) => document.getElementById(id);
-const enc = new TextEncoder();
-
-// Shared implementation (settings_common.js, inlined above). Classless
-// calls render plain on this page — the historical default here.
-const log = StackchanSettings.log;
-
-async function fetchJSON(path) {
-  const r = await fetch(path, { cache: 'no-store' });
-  if (!r.ok) throw new Error(`${path} → ${r.status}`);
-  return r.json();
+    apply_immediate_num("startup-arpeggio", enabled ? 1 : 0);
+    return send_empty(req);
 }
 
-async function postText(path, body) {
-  const r = await fetch(path, {
-    method: 'POST',
-    headers: { 'Content-Type': 'text/plain; charset=utf-8' },
-    body: body,
-  });
-  if (!r.ok) {
-    const t = await r.text();
-    throw new Error(`${path} → ${r.status} ${t}`);
-  }
+esp_err_t handle_servo_enabled_post(httpd_req_t* req)
+{
+    if (!require_auth(req)) return ESP_OK;
+    std::string body;
+    if (read_body_str(req, body, 8) != ESP_OK) return ESP_OK;
+    const bool enabled = !body.empty() && (body[0] == '1' || body[0] == 't' || body[0] == 'y');
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    g_staging.set_num("servo-enabled", enabled ? 1 : 0);
+    xSemaphoreGive(g_mutex);
+    return send_empty(req);
 }
 
-async function postBinary(path, bytes) {
-  const r = await fetch(path, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/octet-stream' },
-    body: bytes,
-  });
-  if (!r.ok) {
-    const t = await r.text();
-    throw new Error(`${path} → ${r.status} ${t}`);
-  }
-  return r;
+esp_err_t handle_lt_config_post(httpd_req_t* req)
+{
+    if (!require_auth(req)) return ESP_OK;
+    // LT timekeeper config JSON. Applied live through the sink (demo_loop
+    // re-parses off this task's stack) and staged so /api/apply persists it.
+    std::string body;
+    if (read_body_str(req, body, kMaxJttsConfig) != ESP_OK) return ESP_OK;
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    g_staging.set_str("lt-config", body);
+    LtConfigSink sink = g_lt_config_sink;
+    xSemaphoreGive(g_mutex);
+    if (sink) sink(body);
+    return send_empty(req);
 }
 
-// Polling this local status never contacts xAI. Only the explicitly confirmed
-// button sends start; neither load/save/reboot nor status polling starts a test.
-let voiceTestBusy = false;
-let voiceApprovalId = 0;
-async function refreshVoiceTestStatus() {
-  if (voiceTestBusy || $('provider').value !== '3') return;
-  try {
-    const s = await fetchJSON('/api/voice-test');
-    voiceApprovalId = s.approval_id;
-    const labels = { idle: '未连接', queued: '等待开始', running: '测试中', stopping: '正在断开' };
-    const reasons = { completed: s.mode === 'local' ? '本地回放完成' : '回复完成', cancelled: '已停止', timeout: '已到时限', error: '发生错误', interrupted: '连接中断' };
-    $('voice-test-status').textContent = `${labels[s.phase] || '状态未知'}${s.phase === 'idle' && reasons[s.reason] ? ' · ' + reasons[s.reason] : ''}${s.phase === 'running' || s.phase === 'queued' ? ' · 剩余 ' + Math.ceil(s.remaining_ms / 1000) + ' 秒' : ''}${!s.available ? ' · 请保存为 Grok 对话模式后重启' : ''}`;
-    $('btn-voice-test-start').disabled = !s.available || s.phase !== 'idle';
-    $('btn-local-mic-test').disabled = !s.available || s.phase !== 'idle';
-    if (s.mode === 'local' && s.phase !== 'idle') $('voice-test-status').textContent = '本地录音回放，不上传、不调用 API · 剩余 ' + Math.ceil(s.remaining_ms / 1000) + ' 秒';
-  } catch (_) {
-    $('btn-voice-test-start').disabled = true;
-    $('btn-local-mic-test').disabled = true;
-    $('voice-test-status').textContent = '无法确认设备状态；未启动测试';
-  }
-}
-$('btn-voice-test-start').addEventListener('click', async () => {
-  if (voiceTestBusy) return;
-  const approvalId = voiceApprovalId;
-  const ok = window.confirm('本次会调用 xAI 付费 API，包括 Agent 可能调用的已启用搜索工具。\n最多 1 轮回复、60 秒（含连接等待）；完成、停止、超时或出错后断开，不自动重连。\n确认承担本次费用并立即开始吗？');
-  if (!ok) return;
-  voiceTestBusy = true;
-  $('btn-voice-test-start').disabled = true;
-  try {
-    const r = await fetch('/api/voice-test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ op: 'start', confirm_paid: true, max_rounds: 1, max_seconds: 60, approval_id: approvalId }) });
-    if (!r.ok) throw new Error(`设备拒绝启动 (${r.status})`);
-    $('voice-test-status').textContent = '已确认本次费用，正在开始测试';
-  } catch (e) {
-    $('voice-test-status').textContent = '启动结果未确认，请点“停止并结束会话”并检查设备；不会自动重试';
-  } finally { voiceTestBusy = false; }
-});
-$('btn-local-mic-test').addEventListener('click', async () => {
-  if (voiceTestBusy) return;
-  const approvalId = voiceApprovalId;
-  if (!window.confirm('本地检查：麦克风开启约 8 秒（含 3 秒预热倒计时），随后回放最后 5 秒。\n看到“请说话”后说“介绍一下自己”。录音仅在设备内存中，结束即清除，不上传、不调用 API、无 API 费用。\n现在已准备好开始吗？')) return;
-  voiceTestBusy = true;
-  $('btn-local-mic-test').disabled = true;
-  $('btn-voice-test-start').disabled = true;
-  try {
-    const r = await fetch('/api/voice-test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ op: 'record_local', confirm_local_recording: true, record_seconds: 5, approval_id: approvalId }) });
-    if (!r.ok) throw new Error('local_record_failed');
-    $('voice-test-status').textContent = '本地倒计时开始，请看设备提示；不会连接云端';
-  } catch (_) {
-    $('voice-test-status').textContent = '本地检查启动未确认；可点停止，不会自动重试';
-  } finally { voiceTestBusy = false; }
-});
-$('btn-voice-test-stop').addEventListener('click', async () => {
-  // Stop remains available while a start request is pending.
-  try {
-    const r = await fetch('/api/voice-test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ op: 'stop' }) });
-    if (!r.ok) throw new Error('stop_failed');
-    $('voice-test-status').textContent = '已请求停止，正在确认断开';
-  } catch (_) { $('voice-test-status').textContent = '停止未确认，请将设备彻底关机'; }
-});
-setInterval(refreshVoiceTestStatus, 1000);
-
-function setFlag(id, on) {
-  $(id).classList.toggle('set', !!on);
+esp_err_t handle_mcp_token_post(httpd_req_t* req)
+{
+    if (!require_auth(req)) return ESP_OK;
+    // The token can be anything up to 128 bytes; the firmware just stores it
+    // verbatim and constant-time compares against the Authorization header.
+    // An empty body explicitly clears the NVS token (next reboot → 404 on
+    // /mcp/*, or falls back to the Kconfig build-time default if present).
+    std::string body;
+    if (read_body_str(req, body, 128) != ESP_OK) return ESP_OK;
+    // 即時反映: MCP 認証キャッシュ g_mcp_active_token を live 更新(空 body で無効化)。
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    g_mcp_active_token = body;
+    xSemaphoreGive(g_mutex);
+    apply_immediate_str("mcp-token", std::move(body));
+    return send_empty(req);
 }
 
-function setDot(id, klass) {
-  $(id).className = 'dot' + (klass ? ' ' + klass : '');
+esp_err_t handle_provider_post(httpd_req_t* req)
+{
+    if (!require_auth(req)) return ESP_OK;
+    std::string body;
+    if (read_body_str(req, body, 8) != ESP_OK) return ESP_OK;
+    const int v = body.empty() ? 0 : (body[0] - '0');
+    config::Provider p = config::Provider::OpenAi;
+    if (v == static_cast<int>(config::Provider::Gemini)) p = config::Provider::Gemini;
+    else if (v == static_cast<int>(config::Provider::XiaoZhi)) p = config::Provider::XiaoZhi;
+    else if (v == static_cast<int>(config::Provider::Grok)) p = config::Provider::Grok;
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    g_staging.set_num("provider", static_cast<std::uint32_t>(p));
+    xSemaphoreGive(g_mutex);
+    return send_empty(req);
 }
 
-// --- jtts config form <-> JSON (mirrors the BLE page's logic) ---
-
-const JTTS_NUM_FIELDS = {
-  f0_hz:           'jtts-f0',
-  formant_scale:   'jtts-formant',
-  mora_ms:         'jtts-mora',
-  gain:            'jtts-gain',
-  breathiness:     'jtts-breath',
-  vibrato_rate_hz: 'jtts-vibrate',
-  vibrato_cents:   'jtts-vibratoc',
-  glottal_oq:      'jtts-oq',
-  tilt_db:         'jtts-tilt',
-  bw_scale:        'jtts-bwscale',
-  hmm_half_tone:   'jtts-halftone',
-};
-
-function readJttsForm() {
-  const obj = {};
-  const voice = $('jtts-voice').value;
-  if (voice) obj.voice = voice;
-  const synth = $('jtts-synth').value;
-  if (synth && synth !== 'v2') obj.synth = synth;
-  const engine = $('jtts-engine').value;
-  if (engine && engine !== 'auto') obj.engine = engine;
-  for (const [key, id] of Object.entries(JTTS_NUM_FIELDS)) {
-    const v = $(id).value.trim();
-    if (v !== '') obj[key] = Number(v);
-  }
-  // `表示 | 読み` pair support shared with the BLE page (settings_common.js).
-  const phrases = StackchanSettings.jttsPhrasesFromText($('jtts-phrases').value);
-  if (phrases.length) obj.phrases = phrases;
-  return Object.keys(obj).length ? JSON.stringify(obj) : '';
+esp_err_t handle_jtts_config_post(httpd_req_t* req)
+{
+    if (!require_auth(req)) return ESP_OK;
+    std::string body;
+    if (read_body_str(req, body, kMaxJttsConfig) != ESP_OK) return ESP_OK;
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    g_staging.set_str("jtts-config", std::move(body));
+    xSemaphoreGive(g_mutex);
+    return send_empty(req);
 }
 
-function applyJttsToForm(json) {
-  if (!json) return;
-  let obj;
-  try { obj = JSON.parse(json); } catch { return; }
-  if (obj.voice) $('jtts-voice').value = obj.voice;
-  if (obj.synth === 'classic' || obj.synth === 'v2') $('jtts-synth').value = obj.synth;
-  if (['auto', 'formant', 'unit', 'hmm'].includes(obj.engine)) {
-    $('jtts-engine').value = obj.engine;
-  }
-  for (const [key, id] of Object.entries(JTTS_NUM_FIELDS)) {
-    if (obj[key] !== undefined) $(id).value = obj[key];
-  }
-  if (Array.isArray(obj.phrases)) {
-    $('jtts-phrases').value = StackchanSettings.jttsPhrasesToText(obj.phrases);
-  }
+esp_err_t handle_servo_limits_post(httpd_req_t* req)
+{
+    if (!require_auth(req)) return ESP_OK;
+    std::string body;
+    if (read_body_str(req, body, kMaxJttsConfig) != ESP_OK) return ESP_OK;
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    g_staging.set_str("servo-limits", std::move(body));
+    xSemaphoreGive(g_mutex);
+    return send_empty(req);
 }
 
-// --- Servo limits + range-setting calibration ---
-// Form serialization and the hand-driven calibration flow (torque-off range
-// mode → live position poll → capture buttons) are shared with the BLE page
-// via settings_common.js — this page supplies the HTTP transport: POST
-// /api/servo-range-mode to toggle, /api/status for the live positions.
-const servoCal = StackchanSettings.setupServoCalibration({
-  pollMs: 300,
-  canToggle: () => true,
-  canCapture: () => true,
-  async setRangeMode(on) {
-    await postText('/api/servo-range-mode', on ? '1' : '0');
-  },
-  async readPositions() {
-    const s = await fetchJSON('/api/status');
-    return {
-      yaw: (typeof s.servo_yaw_raw === 'number') ? s.servo_yaw_raw : -1,
-      pitch: (typeof s.servo_pitch_raw === 'number') ? s.servo_pitch_raw : -1,
-    };
-  },
-});
-
-// MCP API token gen/show/clear + auth-password clear — shared with the BLE
-// page (settings_common.js). The clear paths set dataset.cleared so apply()
-// POSTs an explicit empty body rather than treating empty as "leave as-is".
-StackchanSettings.setupSecretFields();
-
-// --- LT timekeeper config ---
-// Form <-> compact-JSON mapping is shared with the BLE page
-// (settings_common.js buildLtConfigJson / seedLtConfigForm).
-
-async function sendLtConfig() {
-  const json = StackchanSettings.buildLtConfigJson();
-  if (!json) { log('LT 設定: 変更なし', 'ok'); return false; }
-  await postText('/api/lt-config', json);
-  log('LT 設定送信 (即反映)', 'ok');
-  return true;
+esp_err_t handle_system_prompt_post(httpd_req_t* req)
+{
+    if (!require_auth(req)) return ESP_OK;
+    std::string body;
+    if (read_body_str(req, body, kMaxSystemPrompt) != ESP_OK) return ESP_OK;
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    g_staging.set_str("system-prompt", std::move(body));
+    xSemaphoreGive(g_mutex);
+    return send_empty(req);
 }
 
-$('btn-lt-send').addEventListener('click', () => {
-  sendLtConfig().catch((e) => log('LT 設定送信失敗: ' + e.message, 'err'));
-});
-
-// --- 単位連結 音声 DB (.jvox) ---
-
-async function refreshVoiceDbStatus() {
-  try {
-    const st = await fetchJSON('/api/voice-db');
-    $('voice-db-status').textContent = st.loaded
-      ? `状態: ロード済み (${st.units} 単位、保存 ${Math.round(st.stored/1024)} KiB)`
-      : (st.stored > 0 ? '状態: 保存済み・未ロード (PSRAM 不足?)' : '状態: 未登録 (フォルマント合成)');
-  } catch (e) { $('voice-db-status').textContent = '状態: 取得失敗'; }
-}
-$('btn-voice-db-upload').addEventListener('click', async () => {
-  const f = $('voice-db-file').files[0];
-  if (!f) { log('音声 DB: ファイルを選択してください', 'err'); return; }
-  const btn = $('btn-voice-db-upload');
-  btn.disabled = true;
-  const old = btn.textContent;
-  btn.textContent = '送信中…';
-  try {
-    const r = await fetch('/api/voice-db', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/octet-stream' },
-      body: await f.arrayBuffer(),
-    });
-    const body = await r.text();
-    if (!r.ok) throw new Error(`HTTP ${r.status}: ${body}`);
-    const st = JSON.parse(body);
-    log(`音声 DB 登録 (${st.units} 単位、${Math.round(st.stored/1024)} KiB)`, 'ok');
-  } catch (e) {
-    log('音声 DB 登録失敗: ' + e.message, 'err');
-  } finally {
-    btn.textContent = old;
-    btn.disabled = false;
-    refreshVoiceDbStatus();
-  }
-});
-$('btn-voice-db-clear').addEventListener('click', async () => {
-  if (!confirm('音声 DB を削除してフォルマント合成に戻します。よろしいですか?')) return;
-  try {
-    const r = await fetch('/api/voice-db/clear', { method: 'POST' });
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    log('音声 DB 削除', 'ok');
-  } catch (e) {
-    log('音声 DB 削除失敗: ' + e.message, 'err');
-  }
-  refreshVoiceDbStatus();
-});
-refreshVoiceDbStatus();
-
-// --- HMM ボイス (.htsvoice) ---
-
-// 配布ボイス マニフェスト (/api/voices)。stored バイト数 → ラベルの逆引きに
-// 使い、ロード中ボイスの「名前」を状態表示に出す。
-let hmmCatalog = [];
-
-function hmmLabelForSize(bytes) {
-  const hit = hmmCatalog.find((v) => v.size === bytes);
-  return hit ? hit.label : null;
+esp_err_t handle_conv_headers_post(httpd_req_t* req)
+{
+    if (!require_auth(req)) return ESP_OK;
+    std::string body;
+    if (read_body_str(req, body, kMaxConvHeaders) != ESP_OK) return ESP_OK;
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    g_staging.set_str("conv-headers", std::move(body));
+    xSemaphoreGive(g_mutex);
+    return send_empty(req);
 }
 
-async function refreshHmmVoiceStatus() {
-  try {
-    const st = await fetchJSON('/api/hmm-voice');
-    if (st.capacity === 0) {
-      $('hmm-voice-status').textContent = '状態: voice パーティションなし (8 MB ボード / 旧パーティション表)';
-    } else if (st.loaded) {
-      const name = hmmLabelForSize(st.stored);
-      const who = name ? `${name} — ` : '';
-      $('hmm-voice-status').textContent =
-        `状態: ロード済み (${who}${Math.round(st.stored/1024)} KiB / 上限 ${Math.round(st.capacity/1024)} KiB)`;
-    } else {
-      $('hmm-voice-status').textContent = st.stored > 0
-        ? '状態: 保存済み・未ロード (メモリ不足?)' : '状態: 未登録';
-    }
-    return st;
-  } catch (e) { $('hmm-voice-status').textContent = '状態: 取得失敗'; }
-  return null;
+esp_err_t handle_servo_range_mode_post(httpd_req_t* req)
+{
+    if (!require_auth(req)) return ESP_OK;
+    std::string body;
+    if (read_body_str(req, body, 8) != ESP_OK) return ESP_OK;
+    const bool on = !body.empty() && (body[0] == '1' || body[0] == 't' || body[0] == 'y');
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    g_servo_range_mode = on;
+    config::ServoRangeModeSink sink = g_servo_range_mode_sink;
+    xSemaphoreGive(g_mutex);
+    if (sink != nullptr) sink(on);
+    return send_empty(req);
 }
 
-// 配布ボイスは **ブラウザが直接 Pages から** ダウンロードし、そのバイト列を
-// デバイスの /api/hmm-voice (TLS 不要のアップロード経路) に転送する。デバイス
-// 側で HTTPS/TLS を張らないので、内部 RAM が細切れでも確実に動く (デバイスの
-// TLS ハンドシェイクは連続内部 RAM を要求し、カメラ+BLE+WiFi+HMM 稼働後は
-// 確保に失敗する — その回避)。
-//
-// Pages は www.fugafuga.org (カスタム ドメイン) で HTTPS + CORS (*) を直接配信
-// する。ciniml.github.io は http:// へ 301 する (デバイス配信の HTTP ページなら
-// 追従できるが、リダイレクト+CORS を避けてカスタム ドメインを直に叩く)。
-const VOICE_PAGES_BASE = 'https://www.fugafuga.org/stackchan-idf';
-
-// マニフェストをブラウザが直接取得してカタログ ドロップダウンを埋める。
-async function loadHmmCatalog() {
-  const sel = $('hmm-voice-catalog');
-  try {
-    const r = await fetch(`${VOICE_PAGES_BASE}/voices.json`, { cache: 'no-store' });
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    const m = await r.json();
-    hmmCatalog = Array.isArray(m.voices) ? m.voices : [];
-    sel.innerHTML = '';
-    if (!hmmCatalog.length) {
-      sel.innerHTML = '<option value="">— 配布ボイスなし —</option>';
-      return;
-    }
-    for (const v of hmmCatalog) {
-      const o = document.createElement('option');
-      o.value = v.id;
-      o.textContent = `${v.label} (${Math.round((v.size||0)/1024)} KiB, ${v.license||''})`;
-      sel.appendChild(o);
-    }
-    showHmmAttribution(sel.value);
-    // 名前が引けるようになったので状態表示を更新。
-    refreshHmmVoiceStatus();
-  } catch (e) {
-    sel.innerHTML = '<option value="">— 一覧取得失敗 (ネット未接続?) —</option>';
-  }
+esp_err_t handle_device_name_post(httpd_req_t* req)
+{
+    if (!require_auth(req)) return ESP_OK;
+    std::string body;
+    if (read_body_str(req, body, kMaxDeviceName) != ESP_OK) return ESP_OK;
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    g_staging.set_str("device-name", std::move(body));
+    xSemaphoreGive(g_mutex);
+    return send_empty(req);
 }
 
-function showHmmAttribution(id) {
-  const v = hmmCatalog.find((x) => x.id === id);
-  $('hmm-voice-attribution').textContent = v && v.attribution ? v.attribution : '';
-}
-$('hmm-voice-catalog').addEventListener('change', (e) => showHmmAttribution(e.target.value));
-
-// 取得ボタン: ブラウザが Pages から .htsvoice をダウンロード (進捗表示付き)
-// → そのバイト列を /api/hmm-voice に POST してデバイスにインストール。
-$('btn-hmm-voice-fetch').addEventListener('click', async () => {
-  const id = $('hmm-voice-catalog').value;
-  if (!id) { log('取得するボイスを選択してください', 'err'); return; }
-  const v = hmmCatalog.find((x) => x.id === id);
-  // マニフェストの url は base 相対 (例 "voices/mei.htsvoice")。
-  const voiceUrl = `${VOICE_PAGES_BASE}/${(v && v.url) ? v.url : `voices/${id}.htsvoice`}`;
-  const btn = $('btn-hmm-voice-fetch');
-  const old = btn.textContent;
-  const fs = $('hmm-voice-fetch-status');
-  btn.disabled = true;
-  btn.textContent = '取得中…';
-  fs.hidden = false;
-  fs.textContent = `${id} をダウンロード中…`;
-  try {
-    // 1) ブラウザが Pages から直接ダウンロード (進捗はストリームで)。
-    const dl = await fetch(voiceUrl, { cache: 'no-store' });
-    if (!dl.ok) throw new Error(`ダウンロード HTTP ${dl.status}`);
-    const total = Number(dl.headers.get('content-length')) || (v && v.size) || 0;
-    let received = 0;
-    const chunks = [];
-    const reader = dl.body.getReader();
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      chunks.push(value);
-      received += value.length;
-      if (total) fs.textContent = `ダウンロード中 ${Math.round(received * 100 / total)}%  (${Math.round(received/1024)} / ${Math.round(total/1024)} KiB)`;
-    }
-    const blob = new Blob(chunks);
-    const buf = await blob.arrayBuffer();
-    // 2) デバイスに転送してインストール (TLS 不要のアップロード経路)。
-    fs.textContent = `デバイスへ転送中… (${Math.round(buf.byteLength/1024)} KiB)`;
-    const up = await fetch('/api/hmm-voice', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/octet-stream' },
-      body: buf,
-    });
-    const body = await up.text();
-    if (!up.ok) throw new Error(`インストール HTTP ${up.status}: ${body}`);
-    const st = JSON.parse(body);
-    fs.textContent = `インストール完了 (${Math.round((st.stored||0)/1024)} KiB)`;
-    log(`ボイス取得+インストール完了: ${id}`, 'ok');
-  } catch (e) {
-    fs.textContent = '取得失敗: ' + e.message;
-    log('ボイス取得失敗: ' + e.message, 'err');
-  } finally {
-    btn.textContent = old;
-    btn.disabled = false;
-    refreshHmmVoiceStatus();
-  }
-});
-$('btn-hmm-voice-upload').addEventListener('click', async () => {
-  const f = $('hmm-voice-file').files[0];
-  if (!f) { log('HMM ボイス: ファイルを選択してください', 'err'); return; }
-  const btn = $('btn-hmm-voice-upload');
-  btn.disabled = true;
-  const old = btn.textContent;
-  btn.textContent = '送信中…';
-  try {
-    const r = await fetch('/api/hmm-voice', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/octet-stream' },
-      body: await f.arrayBuffer(),
-    });
-    const body = await r.text();
-    if (!r.ok) throw new Error(`HTTP ${r.status}: ${body}`);
-    const st = JSON.parse(body);
-    log(`HMM ボイス登録 (${Math.round(st.stored/1024)} KiB)`, 'ok');
-  } catch (e) {
-    log('HMM ボイス登録失敗: ' + e.message, 'err');
-  } finally {
-    btn.textContent = old;
-    btn.disabled = false;
-    refreshHmmVoiceStatus();
-  }
-});
-$('btn-hmm-voice-clear').addEventListener('click', async () => {
-  if (!confirm('HMM ボイスを削除します。よろしいですか?')) return;
-  try {
-    const r = await fetch('/api/hmm-voice/clear', { method: 'POST' });
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    log('HMM ボイス削除', 'ok');
-  } catch (e) {
-    log('HMM ボイス削除失敗: ' + e.message, 'err');
-  }
-  refreshHmmVoiceStatus();
-});
-refreshHmmVoiceStatus();
-loadHmmCatalog();
-
-// --- Status refresh ---
-
-// Per-board gating: Atom-nyan has no servos, no battery monitor. Older
-// firmware that doesn't report "board" in /api/status leaves this null, in
-// which case we keep everything visible (historical M5-base behaviour).
-function applyBoardGating(kind) {
-  // Capability facts come from the shared board table (settings_common.js).
-  // Unknown / null kind → no gating (both flags false), matching the old
-  // behaviour for pre-BoardKind firmware.
-  const cap = StackchanSettings.BOARDS[kind];
-  const noServo = cap ? !cap.servo : false;
-  const noBattery = cap ? !cap.battery : false;
-  const sv = document.getElementById('servo-section');
-  if (sv) sv.style.display = noServo ? 'none' : '';
-  const svEnToggle = document.querySelector('label.toggle-label[for="servo-enabled"]');
-  if (svEnToggle) svEnToggle.style.display = noServo ? 'none' : '';
-  const svEnHint = svEnToggle ? svEnToggle.nextElementSibling : null;
-  if (svEnHint && svEnHint.tagName === 'P') svEnHint.style.display = noServo ? 'none' : '';
-  const batRow = document.getElementById('dis-battery-row');
-  if (batRow) batRow.style.display = noBattery ? 'none' : '';
-  const batToggle = document.querySelector('label.toggle-label[for="bat-gauge-enabled"]');
-  if (batToggle) batToggle.style.display = noBattery ? 'none' : '';
-  const batHint = batToggle ? batToggle.nextElementSibling : null;
-  if (batHint && batHint.tagName === 'P') batHint.style.display = noBattery ? 'none' : '';
-  const boardEl = document.getElementById('dis-board');
-  if (boardEl) {
-    boardEl.textContent = (kind == null) ? '(unknown)'
-                                         : StackchanSettings.boardLabel(kind);
-  }
+esp_err_t handle_auth_password_post(httpd_req_t* req)
+{
+    if (!require_auth(req)) return ESP_OK;
+    std::string body;
+    if (read_body_str(req, body, kMaxAuthPassword) != ESP_OK) return ESP_OK;
+    // 即時反映: require_auth が g_active.auth_password を毎リクエスト参照するので
+    // 次のリクエストから新パスワードが効く(再起動不要)。
+    apply_immediate_str("auth-password", std::move(body));
+    return send_empty(req);
 }
 
-async function refresh() {
-  try {
-    const s = await fetchJSON('/api/status');
-    $('dis-fw').textContent = s.firmware || '—';
-    // SoftAP provisioning banner. When the device flips itself into AP
-    // mode the /api/status field goes true, and we want the user to see
-    // an obvious "you are on the AP, not on home Wi-Fi" cue plus a hint
-    // that auth is bypassed.
-    const banner = document.getElementById('ap-banner');
-    if (banner) banner.hidden = !s.provisioning_mode;
-    // Pre-fill the release-tag input with the running firmware version so
-    // the most common interaction (reapply / re-flash same tag) is just
-    // "click 適用". Tags that don't yet exist will surface as the device
-    // worker's "HTTP status 404" / "no Content-Length" error after submit.
-    if (s.firmware && s.firmware !== 'unknown' && !$('ota-release-tag').value) {
-      $('ota-release-tag').value = s.firmware;
-    }
-    $('dis-idf').textContent = s.idf || '—';
-    $('dis-ip').textContent = s.ip || '—';
-    applyBoardGating(typeof s.board === 'number' ? s.board : null);
-    // Camera section: driven by capability (has_camera = capture sink
-    // registered on the device) rather than board-kind guessing, so a
-    // camera-less CoreS3 variant naturally hides it.
-    const camSec = document.getElementById('camera-section');
-    if (camSec) camSec.style.display = s.has_camera ? '' : 'none';
-    for (const id of ['btn-camera-capture', 'btn-camera-raw', 'btn-camera-colorbar',
-                      'btn-camera-reg-read', 'btn-camera-reg-write']) {
-      const b = document.getElementById(id);
-      if (b) b.disabled = !s.has_camera;
-    }
-    // Mirror FW + board into the compact page header. Board label is filled
-    // by applyBoardGating into #dis-board; copy whichever value is now there.
-    const hdrFw = document.getElementById('hdr-fw');
-    if (hdrFw) hdrFw.textContent = s.firmware || '—';
-    const hdrBoard = document.getElementById('hdr-board');
-    const boardLbl = document.getElementById('dis-board');
-    if (hdrBoard && boardLbl) hdrBoard.textContent = boardLbl.textContent || '—';
-    $('dis-battery').textContent = (s.battery_mv == null || s.battery_mv < 0)
-      ? '—'
-      : ((s.battery_pct >= 0 ? s.battery_pct + '% ' : '')
-         + (s.battery_mv / 1000).toFixed(2) + 'V ' + (s.battery_ma | 0) + 'mA');
+// --- Batch settings API: one GET/POST pair over the whole registry. The
+// per-key POST routes above remain for compatibility (existing settings
+// pages and external clients); new clients can read and stage everything
+// in two round-trips. ---
 
-    $('ssid').value = s.ssid || '';
-    $('provider').value = String(s.provider ?? 0);
-    $('xai-token-url').value = s.xai_token_url || '';
-    $('xai-key-status').textContent = s.has_xai_device_token
-      ? '设备口令已配置。通过云端短期令牌连接已发布的 Agent；轻触屏幕可停止回复。'
-      : '请配置独立设备访问口令。长期 xAI Key 仅保存在云端。';
-    $('openai-enabled').checked = !!s.openai_enabled;
-    if (typeof s.operation_mode === 'number') {
-      $('operation-mode').value = String(s.operation_mode);
-    }
-    if (typeof s.audio_output === 'number') {
-      $('audio-output').value = String(s.audio_output);
-    }
-    $('barge-in-enabled').checked = !!s.barge_in_enabled; // default false if absent
-    $('rtp-enabled').checked = (s.rtp_audio_enabled !== false); // default on if absent
-    $('jtts-idle-enabled').checked = (s.jtts_idle_enabled !== false); // default on if absent
-    $('led-mouth-sync').checked = !!s.led_mouth_sync_enabled; // default off if absent
-    if (typeof s.lip_sync_mode === 'number') {
-      $('lip-sync-mode').value = String(s.lip_sync_mode);
-    }
-    $('mic-lip-agc').checked = (s.mic_lip_agc_enabled !== false); // default true
-    $('bat-gauge-enabled').checked = (s.battery_gauge_enabled !== false); // default on if absent
-    $('startup-arpeggio-enabled').checked = (s.startup_arpeggio_enabled !== false); // default on if absent
-    $('servo-enabled').checked = (s.servo_enabled !== false); // default on if absent
-    $('mcp-token-state').textContent = s.has_mcp_token ? '設定済' : '未設定';
-    // Device name + auth password (auth password is write-only — never
-    // returned, only a has_* flag).
-    $('device-name').value = s.device_name || '';
-    $('device-name').dataset.initial = s.device_name || '';
-    $('auth-password-state').textContent = s.has_auth_password
-      ? '(設定済 — 変更しない場合は空欄)'
-      : '(未設定 — 空欄なら認証なし)';
-    // ffmpeg send examples. This page is served by the device, so its own
-    // hostname is the RTP destination.
-    const h = location.hostname || (s.ip || '');
-    $('rtp-audio-cmd').textContent =
-      `# L16 (非圧縮)  udp/6970\n` +
-      `ffmpeg -re -i IN -ac 1 -ar 48000 -c:a pcm_s16be -f rtp rtp://${h}:6970\n` +
-      `# AAC (圧縮)    udp/6972\n` +
-      `ffmpeg -re -i IN -ac 1 -ar 48000 -c:a aac -f rtp rtp://${h}:6972\n` +
-      `# mu-law (OBS)  udp/6970\n` +
-      `ffmpeg -re -i IN -ac 1 -ar 8000 -c:a pcm_mulaw -f rtp rtp://${h}:6970`;
-    applyJttsToForm(s.jtts_config || '');
-    StackchanSettings.seedLtConfigForm(s.lt_config || '');
-    servoCal.seedForm(s.servo_limits || '');
-    // If the device reports range mode active (e.g. another tab toggled it),
-    // sync our local toggle so the capture buttons enable.
-    if (typeof s.servo_range_mode === 'boolean') {
-      servoCal.syncRangeOn(s.servo_range_mode);
-    }
-    $('xiaozhi-url').value = s.xiaozhi_url || '';
-    $('system-prompt').value = s.system_prompt || '';
-    $('system-prompt').dataset.initial = s.system_prompt || '';
-    $('conv-headers').value = s.conv_extra_headers || '';
-    $('conv-headers').dataset.initial = s.conv_extra_headers || '';
+// GET /api/settings — every staged-domain setting (ApplyKind Staged/Both)
+// from the active config, keyed by registry id. Secret rows come back as
+// "has_<id>" booleans only. Live rows (LED / mic gain / speaker volume) are
+// deliberately absent: g_active only knows their boot values, so their
+// dedicated GET routes (which read the runtime state) stay authoritative.
+esp_err_t handle_settings_get(httpd_req_t* req)
+{
+    if (!require_auth(req)) return ESP_OK;
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    const auto cfg = g_active;
+    xSemaphoreGive(g_mutex);
 
-    setFlag('flag-ssid', !!s.ssid);
-    setFlag('flag-pass', !!s.has_password);
-    setFlag('flag-key',  !!s.has_openai_key);
-    setFlag('flag-gkey', !!s.has_gemini_key);
-    setFlag('flag-en',   !!s.openai_enabled);
-    setFlag('flag-prov', (s.provider | 0) === 1);
-
-    if (s.wifi_connected) {
-      setDot('wifi-dot', 'wifi-connected');
-      $('wifi-label').textContent = 'Wi-Fi: 接続中';
-    } else {
-      setDot('wifi-dot', '');
-      $('wifi-label').textContent = 'Wi-Fi: —';
-    }
-    setDot('http-dot', 'http-connected');
-    $('http-label').textContent = 'HTTP 接続中';
-    $('btn-ota').disabled = false;
-    // Apply 成功後はボタンを無効化したままにしている (再起動待ち)。デバイスが
-    // 戻って状態取得が通ったここで再有効化しないと、ページを開き直さない限り
-    // 保存 & 再起動が二度と押せない。
-    $('btn-apply').disabled = false;
-    // Release fetch needs the device's STA uplink to reach GitHub Pages.
-    // In AP (provisioning) mode STA is unassociated, so disable the release
-    // controls and show a note pointing at the local-upload path instead.
-    // The server also rejects the POST with 409, but disabling up front
-    // avoids a confusing round-trip.
-    const staDown = !s.wifi_connected;
-    $('btn-ota-release').disabled = staDown;
-    $('ota-release-select').disabled = staDown;
-    const relNote = document.getElementById('ota-release-ap-note');
-    if (relNote) relNote.hidden = !staDown;
-    // Kick off a versions.json fetch in the background. The endpoint
-    // proxies GitHub Pages through the device's STA link, so it works
-    // from AP-mode iOS where the browser can't reach github directly.
-    // Failure (STA down) leaves the dropdown showing its "取得失敗"
-    // placeholder — manual tag entry still works.
-    loadReleaseVersions();
-    log('状態取得 OK', 'ok');
-  } catch (e) {
-    setDot('http-dot', 'http-error');
-    $('http-label').textContent = '接続失敗';
-    log('状態取得失敗: ' + e.message, 'err');
-  }
-}
-
-// --- Apply ---
-
-async function apply() {
-  $('btn-apply').disabled = true;
-  try {
-    const ssid = $('ssid').value;
-    const pass = $('password').value;
-    const apiKey = $('apikey').value;
-    const geminiKey = $('gemini-apikey').value;
-    const xaiUrl = $('xai-token-url').value.trim();
-    const xaiDeviceToken = $('xai-device-token').value.trim();
-    const provider = $('provider').value;
-    const enabled = $('openai-enabled').checked;
-    const rtpEnabled = $('rtp-enabled').checked;
-    const jttsIdleEnabled = $('jtts-idle-enabled').checked;
-    const ledMouthSync = $('led-mouth-sync').checked;
-    const batGauge = $('bat-gauge-enabled').checked;
-    const startupArp = $('startup-arpeggio-enabled').checked;
-    const servoEn = $('servo-enabled').checked;
-    const jtts = readJttsForm();
-
-    if (ssid)      { await postText('/api/ssid', ssid);                       log('SSID 送信', 'ok'); }
-    if (pass)      { await postText('/api/password', pass);                   log('パスワード送信', 'ok'); }
-    if (apiKey)    { await postText('/api/api-key', apiKey);                  log('OpenAI キー送信', 'ok'); }
-    if (geminiKey) { await postText('/api/gemini-api-key', geminiKey);        log('Gemini キー送信', 'ok'); }
-    await postText('/api/xai-token-url', xaiUrl);
-    if (xaiDeviceToken) { await postText('/api/xai-device-token', xaiDeviceToken); log('设备访问口令已发送', 'ok'); }
-    const xzUrl = $('xiaozhi-url').value.trim();
-    const xzToken = $('xiaozhi-token').value;
-    if (xzUrl)     { await postText('/api/xiaozhi-url', xzUrl);               log('XiaoZhi URL 送信', 'ok'); }
-    if (xzToken)   { await postText('/api/xiaozhi-token', xzToken);           log('XiaoZhi トークン送信', 'ok'); }
-    await postText('/api/provider', provider);
-    await postText('/api/operation-mode', $('operation-mode').value);
-    await postText('/api/audio-output', $('audio-output').value);
-    await postText('/api/barge-in', $('barge-in-enabled').checked ? '1' : '0');
-    // Device name: only push when it actually changed (so leaving the field
-    // untouched preserves the current value across saves).
-    const devName = $('device-name').value;
-    if (devName !== ($('device-name').dataset.initial || '')) {
-      await postText('/api/device-name', devName);
-      log('デバイス名送信', 'ok');
-    }
-    // Auth password: push when the user typed something OR explicitly hit
-    // "クリア" (dataset.cleared = 1 → send empty string = disable auth).
-    const authEl = $('auth-password');
-    if (authEl.value || authEl.dataset.cleared === '1') {
-      await postText('/api/auth-password', authEl.value);
-      log(authEl.value ? '認証パスワード送信' : '認証パスワード クリア', 'ok');
-      delete authEl.dataset.cleared;
-    }
-    await postText('/api/openai-enabled', enabled ? '1' : '0');
-    await postText('/api/rtp-enabled', rtpEnabled ? '1' : '0');
-    await postText('/api/jtts-idle-enabled', jttsIdleEnabled ? '1' : '0');
-    await postText('/api/led-mouth-sync', ledMouthSync ? '1' : '0');
-    await postText('/api/lip-sync-mode', $('lip-sync-mode').value);
-    await postText('/api/mic-lip-agc', $('mic-lip-agc').checked ? '1' : '0');
-    await postText('/api/battery-gauge', batGauge ? '1' : '0');
-    await postText('/api/startup-arpeggio', startupArp ? '1' : '0');
-    await postText('/api/servo-enabled', servoEn ? '1' : '0');
-    // MCP token: send only when the user typed something OR explicitly hit
-    // "clear" (signalled by data-cleared="1"). An untouched blank field is
-    // "leave as-is".
-    const mcpEl = $('mcp-token');
-    if (mcpEl.value || mcpEl.dataset.cleared === '1') {
-      await postText('/api/mcp-token', mcpEl.value);
-      log('MCP API トークン送信', 'ok');
-      mcpEl.value = '';
-      delete mcpEl.dataset.cleared;
-    }
-    if (jtts)      { await postText('/api/jtts-config', jtts);                log('jtts 設定送信', 'ok'); }
-    // LT timekeeper: send whatever's in the form so Apply persists it
-    // (the POST stages it server-side; /api/apply writes NVS).
-    await sendLtConfig();
-    // Servo limits: send the canonical JSON every Apply (cheap; server-side merge ignores no-ops).
-    await postText('/api/servo-limits', servoCal.formJson());                 log('サーボ設定送信', 'ok');
-    // System prompt: send only when changed (empty after a change = reset to
-    // the firmware default; unchanged = leave the stored prompt untouched).
-    const sysPrompt = $('system-prompt').value;
-    if (sysPrompt !== ($('system-prompt').dataset.initial ?? '')) {
-      await postText('/api/system-prompt', sysPrompt);                        log('システムプロンプト送信', 'ok');
-    }
-    const convHeaders = $('conv-headers').value;
-    if (convHeaders !== ($('conv-headers').dataset.initial ?? '')) {
-      await postText('/api/conv-headers', convHeaders);                       log('追加 HTTP ヘッダ送信', 'ok');
-    }
-
-    await postText('/api/apply', '');
-    log('Apply 完了 — デバイスは ~200ms 後に再起動します', 'ok');
-    setDot('http-dot', '');
-    $('http-label').textContent = '再起動中';
-  } catch (e) {
-    log('Apply 失敗: ' + e.message, 'err');
-    $('btn-apply').disabled = false;
-  }
-}
-
-// --- OTA ---
-
-const OTA_CHUNK_SIZE = 8192;
-let otaCancel = false;
-
-async function pollOtaStatus() {
-  try {
-    const r = await fetch('/api/ota/status', { cache: 'no-store' });
-    return r.ok ? r.json() : null;
-  } catch { return null; }
-}
-
-function fmtBytes(n) {
-  if (n < 1024) return n + ' B';
-  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KiB';
-  return (n / 1024 / 1024).toFixed(2) + ' MiB';
-}
-
-async function startOta() {
-  const file = $('ota-file').files[0];
-  if (!file) { log('ファイル未選択', 'err'); return; }
-  if (!file.name.toLowerCase().endsWith('.bin')) {
-    log('firmware.bin を選んでください (ZIP 非対応)', 'err');
-    return;
-  }
-
-  $('btn-ota').disabled = true;
-  $('btn-refresh').disabled = true;
-  $('btn-apply').disabled = true;
-  const bar = $('ota-bar-fill');
-  const stats = $('ota-stats');
-  bar.style.width = '0';
-  stats.textContent = '準備中…';
-  otaCancel = false;
-
-  const t0 = performance.now();
-  try {
-    const bytes = new Uint8Array(await file.arrayBuffer());
-    log(`OTA 開始: ${fmtBytes(bytes.length)}`);
-
-    await postText('/api/ota/control', JSON.stringify({ op: 'begin', size: bytes.length }));
-
-    for (let off = 0; off < bytes.length; off += OTA_CHUNK_SIZE) {
-      if (otaCancel) throw new Error('中断');
-      const slice = bytes.subarray(off, Math.min(off + OTA_CHUNK_SIZE, bytes.length));
-      await postBinary('/api/ota/data', slice);
-      const pct = ((off + slice.length) * 100 / bytes.length);
-      bar.style.width = pct.toFixed(1) + '%';
-      const dt = (performance.now() - t0) / 1000;
-      const rate = (off + slice.length) / dt / 1024;
-      stats.textContent = `${pct.toFixed(1)}%  ${fmtBytes(off + slice.length)} / ${fmtBytes(bytes.length)}  ${rate.toFixed(1)} KiB/s`;
-    }
-
-    await postText('/api/ota/control', JSON.stringify({ op: 'end' }));
-    bar.style.width = '100%';
-    stats.textContent = '完了 — 再起動します';
-    log('OTA 完了 — 新ファームに再起動', 'ok');
-  } catch (e) {
-    log('OTA 失敗: ' + e.message, 'err');
-    try { await postText('/api/ota/control', JSON.stringify({ op: 'abort' })); } catch {}
-    stats.textContent = '失敗: ' + e.message;
-  } finally {
-    $('btn-ota').disabled = false;
-    $('btn-refresh').disabled = false;
-    $('btn-apply').disabled = false;
-  }
-}
-
-// Populate the release-tag dropdown from /api/release/versions. The
-// device-side proxy fetches versions.json from GitHub Pages via its own
-// STA link (works in AP mode too since the browser doesn't touch github
-// directly). Only runs on demand — silent if STA is down.
-let releaseVersionsLoaded = false;
-async function loadReleaseVersions() {
-  if (releaseVersionsLoaded) return;
-  const sel = $('ota-release-select');
-  if (!sel) return;
-  try {
-    const r = await fetch('/api/release/versions', { cache: 'no-store' });
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    const arr = await r.json();
-    if (!Array.isArray(arr) || arr.length === 0) throw new Error('empty');
-    // Replace placeholder options.
-    sel.innerHTML = '';
-    const runningFw = $('dis-fw').textContent;
-    arr.forEach((v, idx) => {
-      const opt = document.createElement('option');
-      opt.value = v.tag;
-      // Suffix the currently-running tag so the user can spot it.
-      opt.textContent = (v.tag === runningFw) ? `${v.tag}  (現在)` : v.tag;
-      // Default to the newest tag that isn't the one we're already on.
-      if (idx === 0 && v.tag !== runningFw) opt.selected = true;
-      sel.appendChild(opt);
-    });
-    // Push the selected tag into the text input so 適用 works with one click.
-    if (sel.value) $('ota-release-tag').value = sel.value;
-    releaseVersionsLoaded = true;
-    log(`release tag ${arr.length} 件取得`, 'ok');
-  } catch (e) {
-    sel.innerHTML = '<option value="">— tag 取得失敗 (STA down?) —</option>';
-    // Non-fatal — user can still manually type a tag.
-  }
-}
-
-// Server-side release fetch — device pulls the ZIP-extracted bin from
-// GitHub Pages via its STA connection and writes through esp_ota_write.
-// We just kick off the worker and tail /api/ota/status; the existing
-// progress bar reads the same state field that local-upload OTA writes
-// into, so the visual feedback is unified.
-async function startReleaseOta() {
-  const tag = $('ota-release-tag').value.trim();
-  if (!tag) { log('tag を入力してください (例: v0.7.3)', 'err'); return; }
-
-  $('btn-ota').disabled = true;
-  $('btn-ota-release').disabled = true;
-  $('btn-refresh').disabled = true;
-  $('btn-apply').disabled = true;
-  const bar = $('ota-bar-fill');
-  const stats = $('ota-stats');
-  bar.style.width = '0';
-  stats.textContent = `release ${tag} を device 側で取得中…`;
-
-  try {
-    const r = await fetch('/api/ota/release', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tag })
-    });
-    if (!r.ok) {
-      const t = await r.text();
-      throw new Error(`HTTP ${r.status}: ${t}`);
-    }
-    log(`release fetch 開始: ${tag}`, 'ok');
-
-    // Poll /api/ota/status until phase != idle and != receiving. The worker
-    // updates state through the same ota.cpp dispatcher the BLE / local-
-    // upload path uses, so received/total/phase are live.
-    let lastReceived = -1;
-    let stagnantTicks = 0;
-    while (true) {
-      await new Promise(res => setTimeout(res, 800));
-      const s = await pollOtaStatus();
-      if (!s) {
-        // Lost the device — likely the post-OTA reboot already happened.
-        // Treat as success; the new firmware will re-attach to STA + Wi-Fi
-        // and the page will reload manually.
-        bar.style.width = '100%';
-        stats.textContent = '完了 — device 再起動中';
-        log('release OTA 完了 — 新ファームに再起動', 'ok');
-        return;
-      }
-      if (s.state === 'receiving' && s.total > 0) {
-        const pct = (s.received * 100 / s.total);
-        bar.style.width = pct.toFixed(1) + '%';
-        stats.textContent = `${pct.toFixed(1)}%  ${fmtBytes(s.received)} / ${fmtBytes(s.total)}`;
-        if (s.received === lastReceived) {
-          // Detect a stalled worker (network problem). After ~30 s of no
-          // progress, surface a warning but don't kill the transfer —
-          // recovery is possible.
-          if (++stagnantTicks === 38) log('進捗停止 (STA リンク不調?)', 'err');
+    using config::registry::ApplyKind;
+    using config::registry::ValueType;
+    std::string body = "{";
+    bool first = true;
+    for (const auto& d : config::registry::table()) {
+        if (d.apply == ApplyKind::Live) continue;
+        if (!first) body += ",";
+        first = false;
+        if (d.type == ValueType::Str) {
+            const std::string& v = cfg.*(d.str_member);
+            if (d.secret) {
+                body += "\"has_" + std::string(d.id) + "\":" + (v.empty() ? "false" : "true");
+            } else {
+                body += "\"" + std::string(d.id) + "\":\"" + escape_json(v) + "\"";
+            }
+        } else if (d.type == ValueType::Bool) {
+            body += "\"" + std::string(d.id) + "\":" + (d.num_get(cfg) != 0 ? "true" : "false");
         } else {
-          stagnantTicks = 0;
-          lastReceived = s.received;
+            body += "\"" + std::string(d.id) + "\":" + std::to_string(d.num_get(cfg));
         }
-      } else if (s.state === 'done') {
-        bar.style.width = '100%';
-        stats.textContent = '完了 — device 再起動中';
-        log('release OTA 完了 — 新ファームに再起動', 'ok');
+    }
+    body += "}";
+    return send_json(req, body);
+}
+
+// GET /api/reboot-required — JSON array of registry ids whose change only takes
+// effect after a restart (ApplyKind::Staged). The settings UI reads this to
+// badge those fields and to reboot on Apply only when one of them changed;
+// everything else applies immediately via its per-key route. Additive endpoint
+// so the existing /api/settings shape is untouched.
+esp_err_t handle_reboot_required_get(httpd_req_t* req)
+{
+    if (!require_auth(req)) return ESP_OK;
+    std::string body = "[";
+    bool first = true;
+    for (const auto& d : config::registry::table()) {
+        if (!config::registry::needs_reboot(d)) continue;
+        if (!first) body += ",";
+        first = false;
+        body += "\"" + std::string(d.id) + "\"";
+    }
+    body += "]";
+    return send_json(req, body);
+}
+
+// POST /api/settings — JSON object of {<registry id>: value, …} staged as a
+// batch. Validated in full before anything is staged, so a 400 leaves
+// staging untouched; /api/apply commits as usual. Unknown ids and live rows
+// are rejected (typos must not silently no-op; live rows have their own
+// immediate-apply routes).
+esp_err_t handle_settings_post(httpd_req_t* req)
+{
+    if (!require_auth(req)) return ESP_OK;
+    std::string body;
+    if (read_body_str(req, body, kMaxBodyBytes) != ESP_OK) return ESP_OK;
+    cJSON* root = cJSON_Parse(body.c_str());
+    if (root == nullptr || !cJSON_IsObject(root)) {
+        cJSON_Delete(root);
+        return send_error(req, "400 Bad Request", "expected a JSON object");
+    }
+
+    using config::registry::ApplyKind;
+    using config::registry::ValueType;
+    // Pass 1: validate every member against its descriptor.
+    std::string err;
+    for (const cJSON* item = root->child; item != nullptr; item = item->next) {
+        const char* id = item->string != nullptr ? item->string : "";
+        const auto* d = config::registry::find(id);
+        if (d == nullptr) {
+            err = std::string("unknown setting: ") + id;
+            break;
+        }
+        if (d->apply == ApplyKind::Live) {
+            err = std::string(id) + ": live setting, use /api/" + id;
+            break;
+        }
+        if (d->type == ValueType::Str) {
+            if (!cJSON_IsString(item)) {
+                err = std::string(id) + ": expected string";
+                break;
+            }
+            if (std::strlen(item->valuestring) > d->max_len) {
+                err = std::string(id) + ": longer than " + std::to_string(d->max_len) + " bytes";
+                break;
+            }
+        } else if (d->type == ValueType::Bool) {
+            if (!cJSON_IsBool(item) && !cJSON_IsNumber(item)) {
+                err = std::string(id) + ": expected boolean";
+                break;
+            }
+        } else {
+            if (!cJSON_IsNumber(item) || item->valuedouble < 0 ||
+                (d->max_value != 0 && item->valuedouble > d->max_value)) {
+                err = std::string(id) + ": expected integer 0.." + std::to_string(d->max_value);
+                break;
+            }
+        }
+    }
+    if (!err.empty()) {
+        cJSON_Delete(root);
+        return send_error(req, "400 Bad Request", err.c_str());
+    }
+
+    // Pass 2: stage the whole batch under one lock.
+    LtConfigSink lt_sink = nullptr;
+    std::string lt_json;
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    for (const cJSON* item = root->child; item != nullptr; item = item->next) {
+        const auto* d = config::registry::find(item->string);
+        if (d->type == ValueType::Str) {
+            g_staging.set_str(*d, item->valuestring);
+            // lt-config is ApplyKind::Both: mirror the per-key route and fire
+            // the live sink so the timekeeper updates without waiting for the
+            // Apply reboot.
+            if (std::strcmp(d->id, "lt-config") == 0 && g_lt_config_sink != nullptr) {
+                lt_sink = g_lt_config_sink;
+                lt_json = item->valuestring;
+            }
+        } else if (d->type == ValueType::Bool) {
+            g_staging.set_num(*d, cJSON_IsTrue(item) || (cJSON_IsNumber(item) && item->valuedouble != 0) ? 1 : 0);
+        } else {
+            g_staging.set_num(*d, static_cast<std::uint32_t>(item->valuedouble));
+        }
+    }
+    xSemaphoreGive(g_mutex);
+    cJSON_Delete(root);
+    if (lt_sink != nullptr) lt_sink(lt_json);
+    return send_empty(req);
+}
+
+esp_err_t handle_apply_post(httpd_req_t* req)
+{
+    if (!require_auth(req)) return ESP_OK;
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    config::DeviceConfig merged = g_active;
+    g_staging.merge_into(merged);
+    xSemaphoreGive(g_mutex);
+
+    auto result = config::store::save(merged);
+    if (!result) {
+        ESP_LOGE(kTag, "NVS save failed on Apply");
+        return send_error(req, "500 Internal Server Error", "save failed");
+    }
+    ESP_LOGI(kTag, "config saved via HTTP, scheduling restart in 200 ms");
+
+    if (g_restart_timer == nullptr) {
+        esp_timer_create_args_t args{};
+        args.callback = restart_cb;
+        args.name = "wifi_restart";
+        esp_timer_create(&args, &g_restart_timer);
+    }
+    esp_timer_start_once(g_restart_timer, 200'000);
+    return send_empty(req);
+}
+
+// --- OTA — JSON command + binary chunk POST. Both go through
+// config::ota which is shared with the BLE service. ---
+
+esp_err_t handle_ota_status_get(httpd_req_t* req)
+{
+    if (!require_auth(req)) return ESP_OK;
+    return send_json(req, config::ota::status_json());
+}
+
+esp_err_t handle_ota_control_post(httpd_req_t* req)
+{
+    if (!require_auth(req)) return ESP_OK;
+    std::string body;
+    if (read_body_str(req, body, kMaxJttsConfig) != ESP_OK) return ESP_OK;
+    // An abort during a release-fetch needs to also pull the rug out from
+    // the HTTPS read loop — otherwise the worker keeps streaming bytes into
+    // a now-Idle ota state until the download completes. Forward the abort
+    // to the worker; release_ota::request_abort is a no-op if no fetch is
+    // running, so this is safe to call for every control command.
+    if (body.find("\"abort\"") != std::string::npos) {
+        release_ota::request_abort();
+    }
+    return send_json(req, config::ota::handle_control_command(body));
+}
+
+esp_err_t handle_ota_data_post(httpd_req_t* req)
+{
+    if (!require_auth(req)) return ESP_OK;
+    std::vector<std::uint8_t> body;
+    if (read_body(req, body, kMaxOtaChunk) != ESP_OK) return ESP_OK;
+    return send_json(req, config::ota::handle_data_chunk({body.data(), body.size()}));
+}
+
+// GET /api/release/versions
+//
+// Device-side proxy for GitHub Pages `versions.json`. Same JSON the desktop
+// web-flasher UI consumes, forwarded via the device's own STA link so the
+// on-device settings page can populate a version dropdown even when the
+// browser side has no direct internet access (AP-mode iPhone — DNS hijack
+// blocks the iPhone from resolving github.com, but the device's STA does
+// not go through the hijacked DNS).
+//
+// Requires STA to be up. When STA is down this returns 502 Bad Gateway;
+// the UI should fall back to a manual tag input.
+esp_err_t handle_release_versions_get(httpd_req_t* req)
+{
+    if (!require_auth(req)) return ESP_OK;
+    std::string body;
+    if (!release_ota::fetch_versions_json(body)) {
+        return send_error(req, "502 Bad Gateway",
+                          "versions.json fetch failed (STA down?)");
+    }
+    // Body is already JSON — passthrough as-is with the JSON content-type
+    // header that send_json sets.
+    return send_json(req, body);
+}
+
+// POST /api/ota/release  — body: {"tag":"vX.Y.Z"}
+//
+// Kicks off a worker that fetches the per-board stackchan_idf.bin staged
+// on GitHub Pages and streams it straight into esp_ota_write. Progress is
+// reported through the *same* /api/ota/status endpoint as the browser
+// upload path so the UI doesn't need a separate poller. Returns 200 +
+// "{queued:true}" once the worker is spawned (the actual download takes
+// 30–60 s); the UI polls /api/ota/status until phase == done, then waits
+// for the reboot to land.
+//
+// Requires STA to be up (the device needs its own internet connection to
+// reach GitHub Pages — the AP interface has no upstream). When STA is
+// down the worker fails on http_client_open and /api/ota/status flips to
+// idle.
+esp_err_t handle_ota_release_post(httpd_req_t* req)
+{
+    if (!require_auth(req)) return ESP_OK;
+
+    // Release-fetch pulls the firmware over the device's STA uplink. In AP
+    // (provisioning) mode STA is not associated, so the download can never
+    // succeed — reject up front instead of spawning a worker that only fails
+    // later on http_client_open. Same source of truth as /api/status.
+    const bool sta_connected = g_wifi_connected.load();
+    if (!sta_connected) {
+        httpd_resp_set_status(req, "409 Conflict");
+        return send_json(req, R"({"ok":false,"error":"sta not connected"})");
+    }
+
+    std::string body;
+    // Tags are short (≤ 32 chars per release_ota::tag_looks_safe), so a
+    // 256 B body cap is generous.
+    if (read_body_str(req, body, 256) != ESP_OK) return ESP_OK;
+
+    cJSON* root = cJSON_Parse(body.c_str());
+    if (root == nullptr) {
+        return send_error(req, "400 Bad Request", "bad json");
+    }
+    const cJSON* tag = cJSON_GetObjectItemCaseSensitive(root, "tag");
+    if (!cJSON_IsString(tag) || tag->valuestring == nullptr) {
+        cJSON_Delete(root);
+        return send_error(req, "400 Bad Request", "tag required");
+    }
+    const std::string tag_str = tag->valuestring;
+    cJSON_Delete(root);
+
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    const std::uint8_t board = g_board_kind;
+    xSemaphoreGive(g_mutex);
+
+    auto r = release_ota::start(tag_str, board);
+    if (!r) {
+        const char* msg = "?";
+        switch (r.error()) {
+        case release_ota::StartError::AlreadyRunning:     msg = "already running"; break;
+        case release_ota::StartError::BadTag:             msg = "bad tag";          break;
+        case release_ota::StartError::UnknownBoard:       msg = "unknown board";    break;
+        case release_ota::StartError::WorkerSpawnFailed:  msg = "spawn failed";     break;
+        }
+        return send_error(req, "400 Bad Request", msg);
+    }
+    return send_json(req,
+                     R"({"ok":true,"queued":true})");
+}
+
+// GET /api/camera/capture — one-shot photo for the settings page.
+//
+// Response on success: a raw row-major frame with the dimensions in
+// X-Frame-Width / X-Frame-Height and the pixel encoding in X-Frame-Format
+// ("gray8" = 1 B/px, "rgb565be" = 2 B/px big-endian — QVGA colour is
+// 153 600 B). Raw-over-HTTP avoids a JPEG encoder on the device: ~150 KB
+// over LAN Wi-Fi is ~200 ms, and the page renders it via canvas
+// putImageData.
+//
+// 404 = no camera on this board (sink never registered); 503 = camera
+// currently unavailable (QR scan holds the driver, low memory, sensor
+// fault). The sink itself blocks a few hundred ms for AGC settle.
+esp_err_t handle_camera_capture_get(httpd_req_t* req)
+{
+    if (!require_auth(req)) return ESP_OK;
+
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    CameraCaptureSink sink = g_camera_capture_sink;
+    xSemaphoreGive(g_mutex);
+    if (!sink) {
+        return send_error(req, "404 Not Found", "no camera on this board");
+    }
+
+    // ?fmt=raw → raw Bayer mosaic (ISP bypass); ?test=colorbar → sensor
+    // test pattern. Absent/other values fall through to the normal photo.
+    CameraCaptureOptions options{};
+    {
+        char query[64];
+        if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK) {
+            char val[16];
+            if (httpd_query_key_value(query, "fmt", val, sizeof(val)) == ESP_OK &&
+                std::strcmp(val, "raw") == 0) {
+                options.raw_bayer = true;
+            }
+            if (httpd_query_key_value(query, "test", val, sizeof(val)) == ESP_OK &&
+                std::strcmp(val, "colorbar") == 0) {
+                options.colorbar = true;
+            }
+        }
+    }
+
+    std::vector<std::uint8_t> frame;
+    std::size_t w = 0, h = 0;
+    std::string format = "gray8";
+    if (!sink(options, frame, w, h, format) || frame.empty()) {
+        return send_error(req, "503 Service Unavailable",
+                          "capture failed (camera busy or sensor error)");
+    }
+
+    char wbuf[12], hbuf[12];
+    std::snprintf(wbuf, sizeof(wbuf), "%u", static_cast<unsigned>(w));
+    std::snprintf(hbuf, sizeof(hbuf), "%u", static_cast<unsigned>(h));
+    httpd_resp_set_type(req, "application/octet-stream");
+    httpd_resp_set_hdr(req, "X-Frame-Width", wbuf);
+    httpd_resp_set_hdr(req, "X-Frame-Height", hbuf);
+    httpd_resp_set_hdr(req, "X-Frame-Format", format.c_str());
+    // Expose the custom headers to fetch() — without this the browser hides
+    // them from cross-check reads even same-origin in some UA versions.
+    httpd_resp_set_hdr(req, "Access-Control-Expose-Headers",
+                       "X-Frame-Width, X-Frame-Height, X-Frame-Format");
+    httpd_resp_send(req, reinterpret_cast<const char*>(frame.data()),
+                    static_cast<ssize_t>(frame.size()));
+    return ESP_OK;
+}
+
+// GET/POST /api/camera/reg — raw GC0308 register access for interactive
+// colour tuning against a test chart. Query-string only (no body — keeps
+// parsing trivial): page + reg select the register; POST additionally takes
+// value and writes it. Numbers accept 0x-prefixed hex or decimal. Response
+// is JSON {"page":P,"reg":R,"value":V} with the value read back (GET) or
+// as written (POST).
+esp_err_t handle_camera_reg(httpd_req_t* req)
+{
+    if (!require_auth(req)) return ESP_OK;
+
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    CameraRegSink sink = g_camera_reg_sink;
+    xSemaphoreGive(g_mutex);
+    if (!sink) {
+        return send_error(req, "404 Not Found", "no camera on this board");
+    }
+
+    char query[96];
+    if (httpd_req_get_url_query_str(req, query, sizeof(query)) != ESP_OK) {
+        return send_error(req, "400 Bad Request", "missing query (page, reg[, value])");
+    }
+    // strtoul with base 0 handles both "0x24" and "36".
+    auto parse_u8 = [&](const char* key, std::uint8_t& out) -> bool {
+        char val[16];
+        if (httpd_query_key_value(query, key, val, sizeof(val)) != ESP_OK) return false;
+        char* endp = nullptr;
+        const unsigned long v = std::strtoul(val, &endp, 0);
+        if (endp == val || *endp != '\0' || v > 0xff) return false;
+        out = static_cast<std::uint8_t>(v);
+        return true;
+    };
+
+    std::uint8_t page = 0, reg = 0, value = 0;
+    if (!parse_u8("page", page) || !parse_u8("reg", reg)) {
+        return send_error(req, "400 Bad Request", "page/reg must be 0..255 (0x.. ok)");
+    }
+    const bool write = (req->method == HTTP_POST);
+    if (write && !parse_u8("value", value)) {
+        return send_error(req, "400 Bad Request", "POST needs value=0..255");
+    }
+    if (!sink(write, page, reg, value)) {
+        return send_error(req, "503 Service Unavailable",
+                          "register access failed (camera busy or bus error)");
+    }
+
+    char body[64];
+    std::snprintf(body, sizeof(body), "{\"page\":%u,\"reg\":%u,\"value\":%u}",
+                  static_cast<unsigned>(page), static_cast<unsigned>(reg),
+                  static_cast<unsigned>(value));
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, body, HTTPD_RESP_USE_STRLEN);
+    return ESP_OK;
+}
+
+// POST /api/avatar-dsl — body is a single complete `.avbc` (no chunking; HTTP
+// can carry the whole bytecode in one request). Validates, persists to NVS,
+// and applies live via the registered sink. Returns a JSON status. NVS write
+// happens before sink invocation so a sink failure leaves the new face active
+// after the next reboot anyway.
+esp_err_t handle_avatar_dsl_post(httpd_req_t* req)
+{
+    if (!require_auth(req)) return ESP_OK;
+    std::vector<std::uint8_t> body;
+    if (read_body(req, body, avatar_vm::storage::kMaxBytecodeBytes) != ESP_OK) return ESP_OK;
+
+    auto save_r = avatar_vm::storage::save(body);
+    if (!save_r) {
+        ESP_LOGE(kTag, "avatar-dsl save: %s", avatar_vm::storage::to_string(save_r.error()));
+        return send_error(req, "400 Bad Request",
+                          avatar_vm::storage::to_string(save_r.error()));
+    }
+
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    AvatarBytecodeSink sink = g_avatar_bytecode_sink;
+    xSemaphoreGive(g_mutex);
+
+    bool live_ok = true;
+    if (sink) live_ok = sink(body.data(), body.size());
+
+    char buf[96];
+    std::snprintf(buf, sizeof(buf),
+                  R"({"ok":true,"saved":%u,"live":%s})",
+                  static_cast<unsigned>(body.size()), live_ok ? "true" : "false");
+    return send_json(req, buf);
+}
+
+// POST /api/avatar-dsl/reset — clears the NVS override and reapplies the
+// firmware-embedded default face live.
+esp_err_t handle_avatar_dsl_reset_post(httpd_req_t* req)
+{
+    if (!require_auth(req)) return ESP_OK;
+    auto r = avatar_vm::storage::clear();
+    if (!r) {
+        return send_error(req, "500 Internal Server Error",
+                          avatar_vm::storage::to_string(r.error()));
+    }
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    AvatarBytecodeSink sink = g_avatar_bytecode_sink;
+    xSemaphoreGive(g_mutex);
+    // Passing length=0 is the documented "revert to default" signal.
+    if (sink) (void)sink(nullptr, 0);
+    return send_json(req, R"({"ok":true})");
+}
+
+// --- 音声 DB (.jvox) --------------------------------------------------------
+// 単位連結 TTS の音声 DB。body は数百 KB になるので内部 RAM の vector では
+// なく PSRAM に受ける。検証/保存/live ロードは sink (main/voice_db) 側。
+
+esp_err_t handle_voice_db_post(httpd_req_t* req)
+{
+    if (!require_auth(req)) return ESP_OK;
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    VoiceDbSink sink = g_voice_db_sink;
+    xSemaphoreGive(g_mutex);
+    if (!sink) return send_error(req, "503 Service Unavailable", "voice-db sink not ready");
+
+    constexpr std::size_t kMax = 480 * 1024;
+    const int len = req->content_len;
+    if (len <= 0 || static_cast<std::size_t>(len) > kMax) {
+        return send_error(req, "413 Payload Too Large", "voice DB must be 1..480 KiB");
+    }
+    std::uint8_t* buf =
+        static_cast<std::uint8_t*>(heap_caps_malloc(static_cast<std::size_t>(len),
+                                                    MALLOC_CAP_SPIRAM));
+    if (buf == nullptr) {
+        return send_error(req, "507 Insufficient Storage", "no PSRAM for upload buffer");
+    }
+    std::size_t off = 0;
+    while (off < static_cast<std::size_t>(len)) {
+        const int got = httpd_req_recv(req, reinterpret_cast<char*>(buf + off),
+                                       static_cast<std::size_t>(len) - off);
+        if (got <= 0) {
+            heap_caps_free(buf);
+            httpd_resp_set_status(req, "400 Bad Request");
+            httpd_resp_send(req, nullptr, 0);
+            return ESP_OK;
+        }
+        off += static_cast<std::size_t>(got);
+    }
+    const char* err = sink(buf, static_cast<std::size_t>(len));
+    heap_caps_free(buf);
+    if (err != nullptr) {
+        ESP_LOGE(kTag, "voice-db store: %s", err);
+        return send_error(req, "400 Bad Request", err);
+    }
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    VoiceDbStatusGetter getter = g_voice_db_status_getter;
+    xSemaphoreGive(g_mutex);
+    const VoiceDbStatus st = getter ? getter() : VoiceDbStatus{};
+    char body[96];
+    std::snprintf(body, sizeof(body), R"({"ok":true,"units":%u,"stored":%u})",
+                  static_cast<unsigned>(st.units), static_cast<unsigned>(st.stored_bytes));
+    return send_json(req, body);
+}
+
+esp_err_t handle_voice_db_get(httpd_req_t* req)
+{
+    if (!require_auth(req)) return ESP_OK;
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    VoiceDbStatusGetter getter = g_voice_db_status_getter;
+    xSemaphoreGive(g_mutex);
+    const VoiceDbStatus st = getter ? getter() : VoiceDbStatus{};
+    char body[112];
+    std::snprintf(body, sizeof(body),
+                  R"({"loaded":%s,"units":%u,"stored":%u})",
+                  st.loaded ? "true" : "false", static_cast<unsigned>(st.units),
+                  static_cast<unsigned>(st.stored_bytes));
+    return send_json(req, body);
+}
+
+esp_err_t handle_voice_db_clear_post(httpd_req_t* req)
+{
+    if (!require_auth(req)) return ESP_OK;
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    VoiceDbSink sink = g_voice_db_sink;
+    xSemaphoreGive(g_mutex);
+    if (!sink) return send_error(req, "503 Service Unavailable", "voice-db sink not ready");
+    const char* err = sink(nullptr, 0);
+    if (err != nullptr) return send_error(req, "500 Internal Server Error", err);
+    return send_json(req, R"({"ok":true})");
+}
+
+// --- HMM ボイス (.htsvoice) -------------------------------------------------
+// body は最大 ~2 MB。PSRAM に受けて sink (main/hmm_voice) が flash の voice
+// パーティションへ書く。
+
+esp_err_t handle_hmm_voice_post(httpd_req_t* req)
+{
+    if (!require_auth(req)) return ESP_OK;
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    HmmVoiceSink sink = g_hmm_voice_sink;
+    xSemaphoreGive(g_mutex);
+    if (!sink) return send_error(req, "503 Service Unavailable", "hmm-voice sink not ready");
+
+    constexpr std::size_t kMax = 4 * 1024 * 1024 - 16;  // voice パーティション上限
+    const int len = req->content_len;
+    if (len <= 0 || static_cast<std::size_t>(len) > kMax) {
+        return send_error(req, "413 Payload Too Large", "htsvoice must be 1 B .. 4 MiB");
+    }
+    std::uint8_t* buf =
+        static_cast<std::uint8_t*>(heap_caps_malloc(static_cast<std::size_t>(len),
+                                                    MALLOC_CAP_SPIRAM));
+    if (buf == nullptr) {
+        return send_error(req, "507 Insufficient Storage", "no PSRAM for upload buffer");
+    }
+    std::size_t off = 0;
+    while (off < static_cast<std::size_t>(len)) {
+        const int got = httpd_req_recv(req, reinterpret_cast<char*>(buf + off),
+                                       static_cast<std::size_t>(len) - off);
+        if (got <= 0) {
+            heap_caps_free(buf);
+            httpd_resp_set_status(req, "400 Bad Request");
+            httpd_resp_send(req, nullptr, 0);
+            return ESP_OK;
+        }
+        off += static_cast<std::size_t>(got);
+    }
+    const char* err = sink(buf, static_cast<std::size_t>(len));
+    heap_caps_free(buf);
+    if (err != nullptr) {
+        ESP_LOGE(kTag, "hmm-voice store: %s", err);
+        return send_error(req, "400 Bad Request", err);
+    }
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    HmmVoiceStatusGetter getter = g_hmm_voice_status_getter;
+    xSemaphoreGive(g_mutex);
+    const HmmVoiceStatus st = getter ? getter() : HmmVoiceStatus{};
+    char body[96];
+    std::snprintf(body, sizeof(body), R"({"ok":true,"stored":%u})",
+                  static_cast<unsigned>(st.stored_bytes));
+    return send_json(req, body);
+}
+
+esp_err_t handle_hmm_voice_get(httpd_req_t* req)
+{
+    if (!require_auth(req)) return ESP_OK;
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    HmmVoiceStatusGetter getter = g_hmm_voice_status_getter;
+    xSemaphoreGive(g_mutex);
+    const HmmVoiceStatus st = getter ? getter() : HmmVoiceStatus{};
+    char body[128];
+    std::snprintf(body, sizeof(body),
+                  R"({"loaded":%s,"stored":%u,"capacity":%u})",
+                  st.loaded ? "true" : "false", static_cast<unsigned>(st.stored_bytes),
+                  static_cast<unsigned>(st.capacity));
+    return send_json(req, body);
+}
+
+// GET /api/voices — Pages の voices.json マニフェストを HTTPS プロキシして返す
+// (AP モードの iOS からもデバイス経由で取得できる)。STA が落ちていれば 502。
+esp_err_t handle_voices_get(httpd_req_t* req)
+{
+    if (!require_auth(req)) return ESP_OK;
+    std::string body;
+    if (!voice_fetch::fetch_manifest(body)) {
+        return send_error(req, "502 Bad Gateway", "manifest fetch failed (STA down?)");
+    }
+    return send_json(req, body.c_str());
+}
+
+// POST /api/hmm-voice/fetch — body = ボイス ID (例 "mei")。デバイスが Pages から
+// .htsvoice を同期ダウンロードして voice パーティションへインストールする。
+// httpd タスク (16 KiB 内部スタック) 上で mbedTLS + hts パースを走らせるので、
+// このリクエストはダウンロード完了までブロックする (数〜数十秒)。UI は spinner
+// を出して待つ。
+esp_err_t handle_hmm_voice_fetch_post(httpd_req_t* req)
+{
+    if (!require_auth(req)) return ESP_OK;
+    std::string id;
+    if (read_body_str(req, id, 48) != ESP_OK) return ESP_OK;
+    while (!id.empty() && (id.back() == '\n' || id.back() == '\r' || id.back() == ' ')) id.pop_back();
+    if (id.empty()) return send_error(req, "400 Bad Request", "empty voice id");
+
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    HmmVoiceSink sink = g_hmm_voice_sink;
+    HmmVoiceStatusGetter getter = g_hmm_voice_status_getter;
+    xSemaphoreGive(g_mutex);
+    if (!sink) return send_error(req, "503 Service Unavailable", "hmm-voice sink not ready");
+
+    const char* err = voice_fetch::fetch_and_install(
+        id, [sink](const std::uint8_t* d, std::size_t n) { return sink(d, n); });
+    if (err != nullptr) {
+        ESP_LOGE(kTag, "voice fetch '%s': %s", id.c_str(), err);
+        return send_error(req, "502 Bad Gateway", err);
+    }
+    const HmmVoiceStatus vst = getter ? getter() : HmmVoiceStatus{};
+    char body[96];
+    std::snprintf(body, sizeof(body), R"({"ok":true,"stored":%u})",
+                  static_cast<unsigned>(vst.stored_bytes));
+    return send_json(req, body);
+}
+
+esp_err_t handle_hmm_voice_clear_post(httpd_req_t* req)
+{
+    if (!require_auth(req)) return ESP_OK;
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    HmmVoiceSink sink = g_hmm_voice_sink;
+    xSemaphoreGive(g_mutex);
+    if (!sink) return send_error(req, "503 Service Unavailable", "hmm-voice sink not ready");
+    const char* err = sink(nullptr, 0);
+    if (err != nullptr) return send_error(req, "500 Internal Server Error", err);
+    return send_json(req, R"({"ok":true})");
+}
+
+// --- /mcp/* (Claude Code Channel adapter API, Bearer-auth) -------------
+//
+// Designed for exposure via Cloudflare Tunnel. Every request must carry
+// `Authorization: Bearer <CONFIG_MCP_API_TOKEN>`. An empty Kconfig token
+// disables the entire namespace (handlers respond 404), so the tunnel can
+// stay wired up while the firmware ships with no live endpoint.
+//
+// Body convention: POST endpoints take a plain UTF-8 body (the value IS the
+// body, no JSON wrapper — same pattern as the existing /api/* endpoints).
+// GET /mcp/state returns JSON.
+
+constexpr std::size_t kMaxMcpSayBytes = 1024;        // ~340 hiragana (UTF-8 3 B/char)
+constexpr std::size_t kMaxMcpExpressionBytes = 16;   // longest name is "sleepy"
+constexpr std::size_t kMaxMcpBalloonBytes = 1024;
+
+bool mcp_auth_ok(httpd_req_t* req)
+{
+    // mcp-token は即時反映(handle_mcp_token_post が g_mutex 下で更新)するため、
+    // ロック下でスナップショットしてから比較する(std::string の競合回避)。
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    const std::string token = g_mcp_active_token;
+    xSemaphoreGive(g_mutex);
+    if (token.empty()) return false;
+    char hdr[160];
+    if (httpd_req_get_hdr_value_str(req, "Authorization", hdr, sizeof(hdr)) != ESP_OK) {
+        return false;
+    }
+    constexpr const char* prefix = "Bearer ";
+    constexpr std::size_t plen = 7;
+    if (std::strncmp(hdr, prefix, plen) != 0) return false;
+    // Constant-time compare on the token tail (length mismatch included).
+    const char* tok = hdr + plen;
+    return constant_time_equals(std::string_view(tok, std::strlen(tok)), token);
+}
+
+esp_err_t mcp_gate(httpd_req_t* req)
+{
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    const bool no_token = g_mcp_active_token.empty();
+    xSemaphoreGive(g_mutex);
+    // 404 (not 401) when the API is entirely disabled so the URL surface
+    // is indistinguishable from an unrelated path.
+    if (no_token) {
+        return send_error(req, "404 Not Found");
+    }
+    if (!mcp_auth_ok(req)) {
+        httpd_resp_set_hdr(req, "WWW-Authenticate", "Bearer realm=\"stackchan\"");
+        return send_error(req, "401 Unauthorized");
+    }
+    return ESP_OK;
+}
+
+esp_err_t handle_mcp_say_post(httpd_req_t* req)
+{
+    if (mcp_gate(req) != ESP_OK) return ESP_OK;
+    std::string text;
+    if (read_body_str(req, text, kMaxMcpSayBytes) != ESP_OK) return ESP_OK;
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    McpSayKanaSink sink = g_mcp_say_sink;
+    xSemaphoreGive(g_mutex);
+    if (!sink) return send_error(req, "503 Service Unavailable", "say sink not registered");
+    sink(text);
+    return send_json(req, R"({"ok":true})");
+}
+
+esp_err_t handle_mcp_expression_post(httpd_req_t* req)
+{
+    if (mcp_gate(req) != ESP_OK) return ESP_OK;
+    std::string name;
+    if (read_body_str(req, name, kMaxMcpExpressionBytes) != ESP_OK) return ESP_OK;
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    McpExpressionSink sink = g_mcp_expression_sink;
+    xSemaphoreGive(g_mutex);
+    if (!sink) return send_error(req, "503 Service Unavailable", "expression sink not registered");
+    sink(name);
+    return send_json(req, R"({"ok":true})");
+}
+
+esp_err_t handle_mcp_balloon_post(httpd_req_t* req)
+{
+    if (mcp_gate(req) != ESP_OK) return ESP_OK;
+    std::string text;
+    if (read_body_str(req, text, kMaxMcpBalloonBytes) != ESP_OK) return ESP_OK;
+    // hold_ms is optional, in the query string: ?hold_ms=3000
+    std::uint32_t hold_ms = 0;
+    char q[64];
+    if (httpd_req_get_url_query_str(req, q, sizeof(q)) == ESP_OK) {
+        char val[16];
+        if (httpd_query_key_value(q, "hold_ms", val, sizeof(val)) == ESP_OK) {
+            hold_ms = static_cast<std::uint32_t>(std::strtoul(val, nullptr, 10));
+        }
+    }
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    McpBalloonSink sink = g_mcp_balloon_sink;
+    xSemaphoreGive(g_mutex);
+    if (!sink) return send_error(req, "503 Service Unavailable", "balloon sink not registered");
+    sink(text, hold_ms);
+    return send_json(req, R"({"ok":true})");
+}
+
+esp_err_t handle_mcp_events_get(httpd_req_t* req)
+{
+    if (mcp_gate(req) != ESP_OK) return ESP_OK;
+    // Hand the rest of the lifetime over to the events module. It writes the
+    // SSE headers, streams frames, and tears down on disconnect / hand-off.
+    return mcp_events::run_stream(req);
+}
+
+esp_err_t handle_mcp_state_get(httpd_req_t* req)
+{
+    if (mcp_gate(req) != ESP_OK) return ESP_OK;
+    // /api/status returns the full settings + runtime state for the web UI;
+    // /mcp/state is a Channel-oriented subset (no secrets, no chatbot
+    // provider fields). Mirrors the keys Claude is most likely to query.
+    const bool wifi_ok = g_wifi_connected.load();
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    const int bat_mv = g_battery_mv;
+    const int bat_pct = g_battery_pct;
+    const std::uint8_t board = g_board_kind;
+    xSemaphoreGive(g_mutex);
+
+    const esp_app_desc_t* desc = esp_app_get_description();
+    const std::string fw = desc ? desc->version : "unknown";
+    const std::string ip = current_wifi_ip();
+
+    char buf[256];
+    std::snprintf(buf, sizeof(buf),
+                  R"({"firmware":"%s","ip":"%s","wifi_connected":%s,"battery_mv":%d,"battery_pct":%d,"board":%u})",
+                  escape_json(fw).c_str(), escape_json(ip).c_str(),
+                  wifi_ok ? "true" : "false", bat_mv, bat_pct,
+                  static_cast<unsigned>(board));
+    return send_json(req, std::string{buf});
+}
+
+// --- Audio metrics ---
+
+esp_err_t handle_paid_voice_status(httpd_req_t* req)
+{
+    if (!require_auth(req)) return ESP_OK;
+    const auto s = conversation::paid_voice_test.snapshot(esp_timer_get_time() / 1000);
+    constexpr const char* phases[] = {"idle", "queued", "running", "stopping"};
+    constexpr const char* reasons[] = {"none", "completed", "cancelled", "timeout", "error", "interrupted"};
+    char body[384];
+    std::snprintf(body, sizeof(body),
+        "{\"phase\":\"%s\",\"reason\":\"%s\",\"available\":%s,\"remaining_ms\":%lld,\"max_rounds\":1,\"max_seconds\":60,\"approval_id\":%u,\"mode\":\"%s\",\"local_record_seconds\":5,\"local_max_seconds\":15}",
+        phases[static_cast<int>(s.phase)], reasons[static_cast<int>(s.reason)], s.available ? "true" : "false",
+        static_cast<long long>(s.remaining_ms), static_cast<unsigned>(s.approval_id),
+        s.mode == conversation::PaidVoiceTest::Mode::Local ? "local" : "paid");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    return send_json(req, std::string{body});
+}
+
+esp_err_t handle_paid_voice_control(httpd_req_t* req)
+{
+    if (!require_auth(req)) return ESP_OK;
+    // JSON content type forces cross-origin browser requests through a CORS
+    // preflight; this device does not grant cross-origin control access.
+    char content_type[64]{};
+    if (httpd_req_get_hdr_value_str(req, "Content-Type", content_type, sizeof(content_type)) != ESP_OK ||
+        std::strncmp(content_type, "application/json", 16) != 0)
+        return send_error(req, "415 Unsupported Media Type", "application/json required");
+    std::string body;
+    if (read_body_str(req, body, 256) != ESP_OK) return ESP_OK;
+    auto* root = cJSON_ParseWithLength(body.data(), body.size());
+    const auto command = conversation::parse_paid_voice_command(root);
+    const auto* id = cJSON_GetObjectItemCaseSensitive(root, "approval_id");
+    const auto approval_id = command == conversation::PaidVoiceCommand::Start || command == conversation::PaidVoiceCommand::LocalRecord
+        ? static_cast<std::uint32_t>(id->valuedouble) : 0;
+    cJSON_Delete(root);
+    using Command = conversation::PaidVoiceCommand;
+    if (command == Command::Invalid)
+        return send_error(req, "400 Bad Request", "Explicit confirmation and exact test limits required");
+    if (command == Command::Stop) conversation::paid_voice_test.request_stop();
+    else if (!conversation::paid_voice_test.request_start(true, esp_timer_get_time() / 1000, approval_id,
+        command == Command::LocalRecord ? conversation::PaidVoiceTest::Mode::Local : conversation::PaidVoiceTest::Mode::Paid))
+        return send_error(req, "409 Conflict", "Test unavailable or already active; no new permission granted");
+    return handle_paid_voice_status(req);
+}
+
+// GET /api/metrics/audio — last conversation-turn audio pipeline stats.
+// Returns "{}" when no turn has finished yet (boot fresh / before first
+// reply). Polled by an ops dashboard / phone client; does not require a
+// session token.
+esp_err_t handle_audio_metrics_get(httpd_req_t* req)
+{
+    if (!require_auth(req)) return ESP_OK;
+    std::string body;
+    if (g_audio_metrics_getter != nullptr) {
+        body = g_audio_metrics_getter();
+    } else {
+        body = "{}";
+    }
+    return send_json(req, body);
+}
+
+// --- LED live state ---
+
+// GET /api/led-state — current LED mode/colour/brightness/gradient period.
+esp_err_t handle_led_state_get(httpd_req_t* req)
+{
+    if (!require_auth(req)) return ESP_OK;
+    config::LedState s{};
+    if (g_led_state_getter != nullptr) s = g_led_state_getter();
+    char buf[192];
+    std::snprintf(buf, sizeof(buf),
+                  R"({"mode":%u,"r":%u,"g":%u,"b":%u,"brightness":%u,"period_ds":%u})",
+                  static_cast<unsigned>(s.mode), static_cast<unsigned>(s.r),
+                  static_cast<unsigned>(s.g), static_cast<unsigned>(s.b),
+                  static_cast<unsigned>(s.brightness),
+                  static_cast<unsigned>(s.gradient_period_ds));
+    return send_json(req, std::string{buf});
+}
+
+// POST /api/led-state — body is a small JSON with optional mode / r / g / b /
+// brightness. Missing fields keep their current value. mode is 0..3
+// (off/solid/breath/gradient). r/g/b are 0..255 each (gradient mode ignores
+// them; the rainbow generator drives the strip itself). Returns the resulting
+// state as JSON so the client can confirm the apply.
+esp_err_t handle_led_state_post(httpd_req_t* req)
+{
+    if (!require_auth(req)) return ESP_OK;
+    std::string body;
+    if (read_body_str(req, body, 256) != ESP_OK) return ESP_OK;
+    cJSON* root = cJSON_Parse(body.c_str());
+    if (root == nullptr) {
+        httpd_resp_set_status(req, "400 Bad Request");
+        return send_json(req, R"({"error":"bad json"})");
+    }
+    config::LedStatePatch p{};
+    auto pick = [root](const char* key) -> std::optional<std::uint8_t> {
+        const cJSON* n = cJSON_GetObjectItemCaseSensitive(root, key);
+        if (cJSON_IsNumber(n)) {
+            const int v = n->valueint;
+            if (v < 0 || v > 255) return std::nullopt;
+            return static_cast<std::uint8_t>(v);
+        }
+        return std::nullopt;
+    };
+    p.mode = pick("mode");
+    p.r = pick("r");
+    p.g = pick("g");
+    p.b = pick("b");
+    p.brightness = pick("brightness");
+    p.gradient_period_ds = pick("period_ds");
+    cJSON_Delete(root);
+    if (g_led_state_sink != nullptr) g_led_state_sink(p);
+    return handle_led_state_get(req);
+}
+
+// --- Mic lip-sync calibration ---
+
+// GET /api/mic-lip-gain — current input / output gain percentages.
+esp_err_t handle_mic_lip_gain_get(httpd_req_t* req)
+{
+    if (!require_auth(req)) return ESP_OK;
+    config::MicLipGain g{100, 100};
+    if (g_mic_lip_gain_getter != nullptr) g = g_mic_lip_gain_getter();
+    char buf[64];
+    std::snprintf(buf, sizeof(buf),
+                  R"({"input_pct":%u,"output_pct":%u})",
+                  static_cast<unsigned>(g.input_pct),
+                  static_cast<unsigned>(g.output_pct));
+    return send_json(req, std::string{buf});
+}
+
+// POST /api/mic-lip-gain — body is JSON `{"input_pct":..., "output_pct":...}`.
+// Missing fields fall back to the current value. Sink clamps to 10..1000.
+esp_err_t handle_mic_lip_gain_post(httpd_req_t* req)
+{
+    if (!require_auth(req)) return ESP_OK;
+    std::string body;
+    if (read_body_str(req, body, 128) != ESP_OK) return ESP_OK;
+    cJSON* root = cJSON_Parse(body.c_str());
+    if (root == nullptr) {
+        httpd_resp_set_status(req, "400 Bad Request");
+        return send_json(req, R"({"error":"bad json"})");
+    }
+    config::MicLipGain cur{100, 100};
+    if (g_mic_lip_gain_getter != nullptr) cur = g_mic_lip_gain_getter();
+    auto pick = [root, &cur](const char* key, std::uint16_t fallback) -> std::uint16_t {
+        const cJSON* n = cJSON_GetObjectItemCaseSensitive(root, key);
+        if (cJSON_IsNumber(n)) {
+            const int v = n->valueint;
+            if (v < 0) return 0;
+            if (v > 65535) return 65535;
+            return static_cast<std::uint16_t>(v);
+        }
+        return fallback;
+    };
+    config::MicLipGain g{};
+    g.input_pct  = pick("input_pct",  cur.input_pct);
+    g.output_pct = pick("output_pct", cur.output_pct);
+    cJSON_Delete(root);
+    if (g_mic_lip_gain_sink != nullptr) g_mic_lip_gain_sink(g);
+    return handle_mic_lip_gain_get(req);
+}
+
+// --- Speaker volume ---
+
+// GET /api/speaker-volume — current percent (0..200).
+esp_err_t handle_speaker_volume_get(httpd_req_t* req)
+{
+    if (!require_auth(req)) return ESP_OK;
+    std::uint16_t pct = 100;
+    if (g_speaker_volume_getter != nullptr) pct = g_speaker_volume_getter();
+    char buf[40];
+    std::snprintf(buf, sizeof(buf), R"({"pct":%u})", static_cast<unsigned>(pct));
+    return send_json(req, std::string{buf});
+}
+
+// POST /api/speaker-volume — body is plain text integer 0..200.
+esp_err_t handle_speaker_volume_post(httpd_req_t* req)
+{
+    if (!require_auth(req)) return ESP_OK;
+    std::string body;
+    if (read_body_str(req, body, 16) != ESP_OK) return ESP_OK;
+    const int v = std::atoi(body.c_str());
+    if (v < 0 || v > 200) {
+        httpd_resp_set_status(req, "400 Bad Request");
+        return send_text(req, "speaker volume out of range (0..200)");
+    }
+    if (g_speaker_volume_sink != nullptr) {
+        g_speaker_volume_sink(static_cast<std::uint16_t>(v));
+    }
+    return send_empty(req);
+}
+
+// POST /api/jtts-say — body is plain UTF-8 (kana) text. Test the
+// jtts voice from the settings page. Same auth as the other /api/*
+// endpoints (HTTP Basic via require_auth), so no MCP token needed —
+// distinct from /mcp/say which is for external automation.
+esp_err_t handle_jtts_say_post(httpd_req_t* req)
+{
+    if (!require_auth(req)) return ESP_OK;
+    constexpr std::size_t kMaxJttsBytes = 192;
+    std::string body;
+    if (read_body_str(req, body, kMaxJttsBytes) != ESP_OK) return ESP_OK;
+    if (body.empty()) {
+        httpd_resp_set_status(req, "400 Bad Request");
+        return send_text(req, "empty body");
+    }
+    if (g_jtts_say_sink == nullptr) {
+        return send_error(req, "503 Service Unavailable", "jtts sink not registered");
+    }
+    g_jtts_say_sink(body);
+    return send_empty(req);
+}
+
+// --- Static root ---
+
+esp_err_t handle_root_get(httpd_req_t* req)
+{
+    if (!require_auth(req)) {
+        ESP_LOGW(kTag, "GET / -> 401 (auth)");
+        return ESP_OK;
+    }
+    const std::size_t len = settings_wifi_html_end - settings_wifi_html_start;
+    httpd_resp_set_type(req, "text/html; charset=utf-8");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-cache");
+    const esp_err_t err = httpd_resp_send(req, settings_wifi_html_start, len);
+    ESP_LOGI(kTag, "GET / -> 200, %u B, send=%s",
+             static_cast<unsigned>(len), esp_err_to_name(err));
+    return err;
+}
+
+void add(httpd_handle_t s, const char* uri, httpd_method_t m, esp_err_t (*h)(httpd_req_t*))
+{
+    httpd_uri_t cfg{};
+    cfg.uri = uri;
+    cfg.method = m;
+    cfg.handler = h;
+    cfg.user_ctx = nullptr;
+    esp_err_t err = httpd_register_uri_handler(s, &cfg);
+    if (err != ESP_OK) {
+        // Most likely ESP_ERR_HTTPD_HANDLERS_FULL: max_uri_handlers
+        // (wifi_config_service.cpp) is below the number of add() calls below.
+        // Make the drop loud so it can't silently 404 a route again.
+        ESP_LOGE(kTag, "register_uri_handler(%s) failed: %s — raise cfg.max_uri_handlers",
+                 uri, esp_err_to_name(err));
+    }
+}
+
+} // namespace
+
+void register_handlers(httpd_handle_t server, const config::DeviceConfig& current)
+{
+    if (g_mutex == nullptr) {
+        g_mutex = xSemaphoreCreateMutex();
+    }
+    g_active = current;
+
+    // Resolve the live /mcp/* bearer. NVS wins so rotations from the settings
+    // UI stick across reboots; the Kconfig token survives as a build-time
+    // default for installs that pre-date the NVS field. Empty after both
+    // sources means /mcp/* answers 404.
+    g_mcp_active_token = current.mcp_api_token;
+    if (g_mcp_active_token.empty() && CONFIG_MCP_API_TOKEN[0] != '\0') {
+        g_mcp_active_token = CONFIG_MCP_API_TOKEN;
+        ESP_LOGI(kTag, "mcp token: NVS empty, using CONFIG_MCP_API_TOKEN fallback");
+    } else if (!g_mcp_active_token.empty()) {
+        ESP_LOGI(kTag, "mcp token: NVS (%u bytes)",
+                 static_cast<unsigned>(g_mcp_active_token.size()));
+    } else {
+        ESP_LOGI(kTag, "mcp token: none → /mcp/* will answer 404");
+    }
+
+    add(server, "/",                    HTTP_GET,  handle_root_get);
+    add(server, "/api/status",          HTTP_GET,  handle_status_get);
+    add(server, "/api/ssid",            HTTP_POST, handle_ssid_post);
+    add(server, "/api/password",        HTTP_POST, handle_password_post);
+    add(server, "/api/api-key",         HTTP_POST, handle_api_key_post);
+    add(server, "/api/gemini-api-key",  HTTP_POST, handle_gemini_api_key_post);
+    add(server, "/api/xai-api-key",     HTTP_POST, handle_xai_api_key_post);
+    add(server, "/api/xai-token-url",   HTTP_POST, handle_xai_token_url_post);
+    add(server, "/api/xai-device-token", HTTP_POST, handle_xai_device_token_post);
+    add(server, "/api/xiaozhi-url",      HTTP_POST, handle_xiaozhi_url_post);
+    add(server, "/api/xiaozhi-token",    HTTP_POST, handle_xiaozhi_token_post);
+    add(server, "/api/openai-enabled",  HTTP_POST, handle_openai_enabled_post);
+    add(server, "/api/rtp-enabled",     HTTP_POST, handle_rtp_enabled_post);
+    add(server, "/api/jtts-idle-enabled", HTTP_POST, handle_jtts_idle_enabled_post);
+    add(server, "/api/led-mouth-sync",  HTTP_POST, handle_led_mouth_sync_post);
+    add(server, "/api/operation-mode",  HTTP_POST, handle_operation_mode_post);
+    add(server, "/api/audio-output",    HTTP_POST, handle_audio_output_post);
+    add(server, "/api/lip-sync-mode",   HTTP_POST, handle_lip_sync_mode_post);
+    add(server, "/api/mic-lip-agc",     HTTP_POST, handle_mic_lip_agc_post);
+    add(server, "/api/barge-in",        HTTP_POST, handle_barge_in_enabled_post);
+    add(server, "/api/battery-gauge",   HTTP_POST, handle_battery_gauge_post);
+    add(server, "/api/startup-arpeggio",HTTP_POST, handle_startup_arpeggio_post);
+    add(server, "/api/servo-enabled",   HTTP_POST, handle_servo_enabled_post);
+    add(server, "/api/mcp-token",       HTTP_POST, handle_mcp_token_post);
+    add(server, "/api/lt-config",       HTTP_POST, handle_lt_config_post);
+    add(server, "/api/provider",        HTTP_POST, handle_provider_post);
+    add(server, "/api/jtts-config",     HTTP_POST, handle_jtts_config_post);
+    add(server, "/api/servo-limits",    HTTP_POST, handle_servo_limits_post);
+    add(server, "/api/servo-range-mode", HTTP_POST, handle_servo_range_mode_post);
+    add(server, "/api/system-prompt",   HTTP_POST, handle_system_prompt_post);
+    add(server, "/api/conv-headers",     HTTP_POST, handle_conv_headers_post);
+    add(server, "/api/settings",        HTTP_GET,  handle_settings_get);
+    add(server, "/api/settings",        HTTP_POST, handle_settings_post);
+    add(server, "/api/reboot-required", HTTP_GET,  handle_reboot_required_get);
+    add(server, "/api/apply",           HTTP_POST, handle_apply_post);
+    add(server, "/api/ota/status",      HTTP_GET,  handle_ota_status_get);
+    add(server, "/api/ota/control",     HTTP_POST, handle_ota_control_post);
+    add(server, "/api/ota/data",        HTTP_POST, handle_ota_data_post);
+    add(server, "/api/ota/release",     HTTP_POST, handle_ota_release_post);
+    add(server, "/api/camera/capture",  HTTP_GET,  handle_camera_capture_get);
+    add(server, "/api/camera/reg",      HTTP_GET,  handle_camera_reg);
+    add(server, "/api/camera/reg",      HTTP_POST, handle_camera_reg);
+    add(server, "/api/release/versions", HTTP_GET, handle_release_versions_get);
+    add(server, "/api/avatar-dsl",       HTTP_POST, handle_avatar_dsl_post);
+    add(server, "/api/avatar-dsl/reset", HTTP_POST, handle_avatar_dsl_reset_post);
+    add(server, "/api/voice-db",         HTTP_GET,  handle_voice_db_get);
+    add(server, "/api/voice-db",         HTTP_POST, handle_voice_db_post);
+    add(server, "/api/voice-db/clear",   HTTP_POST, handle_voice_db_clear_post);
+    add(server, "/api/hmm-voice",        HTTP_GET,  handle_hmm_voice_get);
+    add(server, "/api/hmm-voice",        HTTP_POST, handle_hmm_voice_post);
+    add(server, "/api/hmm-voice/clear",  HTTP_POST, handle_hmm_voice_clear_post);
+    add(server, "/api/hmm-voice/fetch",  HTTP_POST, handle_hmm_voice_fetch_post);
+    add(server, "/api/voices",           HTTP_GET,  handle_voices_get);
+    add(server, "/api/metrics/audio",    HTTP_GET,  handle_audio_metrics_get);
+    add(server, "/api/voice-test",       HTTP_GET,  handle_paid_voice_status);
+    add(server, "/api/voice-test",       HTTP_POST, handle_paid_voice_control);
+    add(server, "/api/led-state",        HTTP_GET,  handle_led_state_get);
+    add(server, "/api/led-state",        HTTP_POST, handle_led_state_post);
+    add(server, "/api/mic-lip-gain",     HTTP_GET,  handle_mic_lip_gain_get);
+    add(server, "/api/mic-lip-gain",     HTTP_POST, handle_mic_lip_gain_post);
+    add(server, "/api/speaker-volume",   HTTP_GET,  handle_speaker_volume_get);
+    add(server, "/api/speaker-volume",   HTTP_POST, handle_speaker_volume_post);
+    add(server, "/api/jtts-say",         HTTP_POST, handle_jtts_say_post);
+    add(server, "/api/device-name",     HTTP_POST, handle_device_name_post);
+    add(server, "/api/auth-password",   HTTP_POST, handle_auth_password_post);
+    // Claude Code Channel adapter API (Bearer-gated). Empty
+    // CONFIG_MCP_API_TOKEN keeps these handlers registered but they 404.
+    add(server, "/mcp/say",              HTTP_POST, handle_mcp_say_post);
+    add(server, "/mcp/expression",       HTTP_POST, handle_mcp_expression_post);
+    add(server, "/mcp/balloon",          HTTP_POST, handle_mcp_balloon_post);
+    add(server, "/mcp/state",            HTTP_GET,  handle_mcp_state_get);
+    add(server, "/mcp/events",           HTTP_GET,  handle_mcp_events_get);
+}
+
+void set_wifi_connected(bool connected)
+{
+    // No mutex: g_wifi_connected is atomic precisely so this can run before
+    // g_mutex exists. IP_EVENT_STA_GOT_IP fires ~4 s ahead of the
+    // cfg-wifi-init task's register_handlers() (which creates g_mutex), and
+    // GOT_IP does not re-fire — the old null-mutex early-return silently
+    // dropped the only notification, pinning the flag to false forever.
+    g_wifi_connected.store(connected);
+}
+
+void set_provisioning_mode(bool active)
+{
+    // No mutex gate: must stick even before register_handlers() runs (see
+    // the g_provisioning_mode declaration comment).
+    g_provisioning_mode.store(active);
+}
+
+void set_battery(int millivolts, int milliamps, int percent)
+{
+    if (g_mutex == nullptr) return;
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    g_battery_mv = millivolts;
+    g_battery_ma = milliamps;
+    g_battery_pct = percent;
+    xSemaphoreGive(g_mutex);
+}
+
+void set_servo_range_mode_sink(config::ServoRangeModeSink sink)
+{
+    if (g_mutex == nullptr) {
+        g_servo_range_mode_sink = sink;
         return;
-      } else if (s.state === 'failed') {
-        throw new Error(s.error || 'unknown');
-      }
     }
-  } catch (e) {
-    log('release OTA 失敗: ' + e.message, 'err');
-    stats.textContent = '失敗: ' + e.message;
-  } finally {
-    $('btn-ota').disabled = false;
-    $('btn-ota-release').disabled = false;
-    $('btn-refresh').disabled = false;
-    $('btn-apply').disabled = false;
-  }
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    g_servo_range_mode_sink = sink;
+    xSemaphoreGive(g_mutex);
 }
 
-// --- Avatar DSL editor + send -------------------------------------------
-
-// Editor UI (compile / presets / downloads / .avdsl load) is shared with the
-// BLE page via settings_common.js (inlined above) — this page only supplies
-// the HTTP transport adapter. The POST /api/avatar-dsl response ({ok, saved,
-// live}) is normalised to the shared {ok, saved, note, raw} shape here.
-StackchanSettings.setupDslEditor({
-  isConnected: () => true,
-  notConnectedMsg: '未接続',
-  compilerMissingMsg: 'DSL コンパイラ バンドルが読込み失敗 (firmware ビルド不一致の可能性)',
-  async send(u8) {
-    const r = await fetch('/api/avatar-dsl', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/octet-stream' },
-      body: u8,
-    });
-    const body = await r.text();
-    if (!r.ok) throw new Error(`HTTP ${r.status}: ${body || r.statusText}`);
-    let parsed;
-    try { parsed = JSON.parse(body); } catch { parsed = null; }
-    if (parsed && parsed.ok) {
-      return {
-        ok: true,
-        saved: parsed.saved,
-        note: parsed.live === false ? ' (NVS のみ書込、live 反映は失敗)' : '',
-        raw: body,
-      };
+void set_servo_positions_getter(config::ServoPositionsGetter getter)
+{
+    if (g_mutex == nullptr) {
+        g_servo_positions_getter = getter;
+        return;
     }
-    return { ok: true, saved: null, raw: body };
-  },
-  async reset() {
-    const r = await fetch('/api/avatar-dsl/reset', { method: 'POST' });
-    const body = await r.text();
-    if (!r.ok) throw new Error(`HTTP ${r.status}: ${body || r.statusText}`);
-    return { raw: '' };
-  },
-});
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    g_servo_positions_getter = getter;
+    xSemaphoreGive(g_mutex);
+}
 
-// --- Wire up ---
-
-$('btn-refresh').addEventListener('click', refresh);
-$('btn-apply').addEventListener('click', apply);
-$('btn-ota').addEventListener('click', startOta);
-$('btn-ota-release').addEventListener('click', startReleaseOta);
-
-// --- Camera test capture ---------------------------------------------------
-// GET /api/camera/capture returns raw 8-bit grayscale with the dimensions in
-// X-Frame-Width/Height headers. Rendering client-side via putImageData keeps
-// the device free of a JPEG encoder; 77 KB over LAN is fast enough.
-
-let cameraLastRaw = null; // {buf, w, h} of the last RAW (Bayer) capture
-
-async function cameraCapture(query) {
-  const btn = $('btn-camera-capture');
-  const msg = $('camera-msg');
-  btn.disabled = true;
-  msg.textContent = '撮影中… (~1 秒)';
-  try {
-    const r = await fetch('/api/camera/capture' + (query || ''), { cache: 'no-store' });
-    if (!r.ok) throw new Error('HTTP ' + r.status + ': ' + await r.text());
-    const w = parseInt(r.headers.get('X-Frame-Width') || '320', 10);
-    const h = parseInt(r.headers.get('X-Frame-Height') || '240', 10);
-    const fmt = r.headers.get('X-Frame-Format') || 'gray8';
-    const bpp = fmt === 'rgb565be' ? 2 : 1;
-    const buf = new Uint8Array(await r.arrayBuffer());
-    if (buf.length < w * h * bpp) {
-      throw new Error(`short frame (${buf.length} < ${w * h * bpp}, fmt=${fmt})`);
+void set_audio_metrics_getter(config::AudioMetricsJsonGetter getter)
+{
+    // Plain write; same idempotent registration as the other getters.
+    if (g_mutex == nullptr) {
+        g_audio_metrics_getter = getter;
+        return;
     }
-    const canvas = $('camera-canvas');
-    canvas.width = w;
-    canvas.height = h;
-    const ctx = canvas.getContext('2d');
-    const img = ctx.createImageData(w, h);
-    if (fmt === 'rgb565be') {
-      // RGB565 big-endian: RRRRRGGG GGGBBBBB. Expand 5/6-bit channels to
-      // 8 bit with the standard replicate-high-bits scaling so full white
-      // maps to 255 (not 248).
-      for (let i = 0; i < w * h; i++) {
-        const v = (buf[2 * i] << 8) | buf[2 * i + 1];
-        const r5 = (v >> 11) & 0x1f;
-        const g6 = (v >> 5) & 0x3f;
-        const b5 = v & 0x1f;
-        img.data[4 * i]     = (r5 << 3) | (r5 >> 2);
-        img.data[4 * i + 1] = (g6 << 2) | (g6 >> 4);
-        img.data[4 * i + 2] = (b5 << 3) | (b5 >> 2);
-        img.data[4 * i + 3] = 255;
-      }
-    } else if (fmt.startsWith('bayer8')) {
-      // Raw Bayer mosaic (RGGB) — simple bilinear-ish demosaic for an
-      // on-screen preview. Analysis should use the saved .pgm (untouched
-      // sensor bytes), not this preview.
-      const at = (x, y) => buf[Math.min(h - 1, Math.max(0, y)) * w +
-                               Math.min(w - 1, Math.max(0, x))];
-      for (let y = 0; y < h; y++) {
-        for (let x = 0; x < w; x++) {
-          const i = y * w + x;
-          const rRow = (y & 1) === 0, rCol = (x & 1) === 0;
-          let rr, gg, bb;
-          if (rRow && rCol) {          // R site
-            rr = at(x, y);
-            gg = (at(x - 1, y) + at(x + 1, y) + at(x, y - 1) + at(x, y + 1)) / 4;
-            bb = (at(x - 1, y - 1) + at(x + 1, y - 1) + at(x - 1, y + 1) + at(x + 1, y + 1)) / 4;
-          } else if (!rRow && !rCol) { // B site
-            bb = at(x, y);
-            gg = (at(x - 1, y) + at(x + 1, y) + at(x, y - 1) + at(x, y + 1)) / 4;
-            rr = (at(x - 1, y - 1) + at(x + 1, y - 1) + at(x - 1, y + 1) + at(x + 1, y + 1)) / 4;
-          } else {                     // G site
-            gg = at(x, y);
-            if (rRow) { rr = (at(x - 1, y) + at(x + 1, y)) / 2; bb = (at(x, y - 1) + at(x, y + 1)) / 2; }
-            else      { bb = (at(x - 1, y) + at(x + 1, y)) / 2; rr = (at(x, y - 1) + at(x, y + 1)) / 2; }
-          }
-          img.data[4 * i] = rr;
-          img.data[4 * i + 1] = gg;
-          img.data[4 * i + 2] = bb;
-          img.data[4 * i + 3] = 255;
-        }
-      }
-    } else {
-      for (let i = 0; i < w * h; i++) {
-        const v = buf[i];
-        img.data[4 * i] = v;
-        img.data[4 * i + 1] = v;
-        img.data[4 * i + 2] = v;
-        img.data[4 * i + 3] = 255;
-      }
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    g_audio_metrics_getter = getter;
+    xSemaphoreGive(g_mutex);
+}
+
+void set_led_state_getter(config::LedStateGetter getter)
+{
+    if (g_mutex == nullptr) { g_led_state_getter = getter; return; }
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    g_led_state_getter = getter;
+    xSemaphoreGive(g_mutex);
+}
+
+void set_led_state_sink(config::LedStateSink sink)
+{
+    if (g_mutex == nullptr) { g_led_state_sink = sink; return; }
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    g_led_state_sink = sink;
+    xSemaphoreGive(g_mutex);
+}
+
+void set_mic_lip_gain_getter(config::MicLipGainGetter getter)
+{
+    if (g_mutex == nullptr) { g_mic_lip_gain_getter = getter; return; }
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    g_mic_lip_gain_getter = getter;
+    xSemaphoreGive(g_mutex);
+}
+
+void set_mic_lip_gain_sink(config::MicLipGainSink sink)
+{
+    if (g_mutex == nullptr) { g_mic_lip_gain_sink = sink; return; }
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    g_mic_lip_gain_sink = sink;
+    xSemaphoreGive(g_mutex);
+}
+
+void set_speaker_volume_getter(config::SpeakerVolumeGetter getter)
+{
+    if (g_mutex == nullptr) { g_speaker_volume_getter = getter; return; }
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    g_speaker_volume_getter = getter;
+    xSemaphoreGive(g_mutex);
+}
+
+void set_speaker_volume_sink(config::SpeakerVolumeSink sink)
+{
+    if (g_mutex == nullptr) { g_speaker_volume_sink = sink; return; }
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    g_speaker_volume_sink = sink;
+    xSemaphoreGive(g_mutex);
+}
+
+void set_jtts_say_kana_sink(config::JttsSayKanaSink sink)
+{
+    if (g_mutex == nullptr) { g_jtts_say_sink = sink; return; }
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    g_jtts_say_sink = sink;
+    xSemaphoreGive(g_mutex);
+}
+
+void set_board_kind(std::uint8_t kind)
+{
+    if (g_mutex == nullptr) {
+        g_board_kind = kind;
+        return;
     }
-    ctx.putImageData(img, 0, 0);
-    if (fmt.startsWith('bayer8')) {
-      cameraLastRaw = { buf, w, h, fmt };
-      $('btn-camera-save-raw').disabled = false;
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    g_board_kind = kind;
+    xSemaphoreGive(g_mutex);
+}
+
+void set_avatar_bytecode_sink(AvatarBytecodeSink sink)
+{
+    if (g_mutex == nullptr) {
+        g_avatar_bytecode_sink = std::move(sink);
+        return;
     }
-    $('btn-camera-save').disabled = false;
-    msg.textContent = `${w}×${h} ${fmt} — ${new Date().toLocaleTimeString()}`;
-    log('カメラ撮影 OK (' + fmt + ')', 'ok');
-  } catch (e) {
-    msg.textContent = '失敗: ' + e.message;
-    log('カメラ撮影失敗: ' + e.message, 'err');
-  } finally {
-    btn.disabled = false;
-  }
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    g_avatar_bytecode_sink = std::move(sink);
+    xSemaphoreGive(g_mutex);
 }
 
-function cameraSavePng() {
-  $('camera-canvas').toBlob((blob) => {
-    if (!blob) return;
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    const ts = new Date().toISOString().replace(/[:.]/g, '-');
-    a.download = `stackchan-camera-${ts}.png`;
-    a.click();
-    URL.revokeObjectURL(a.href);
-  }, 'image/png');
-}
-
-// Save the last RAW capture as binary PGM (P5) — the untouched sensor bytes
-// with a comment recording the Bayer phase, loadable by numpy / ImageMagick /
-// dcraw-style tooling for off-device colour analysis.
-function cameraSaveRawPgm() {
-  if (!cameraLastRaw) return;
-  const { buf, w, h, fmt } = cameraLastRaw;
-  const header = new TextEncoder().encode(`P5\n# ${fmt} (GC0308, ISP bypass)\n${w} ${h}\n255\n`);
-  const blob = new Blob([header, buf], { type: 'application/octet-stream' });
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  const ts = new Date().toISOString().replace(/[:.]/g, '-');
-  a.download = `stackchan-camera-${ts}-${fmt}.pgm`;
-  a.click();
-  URL.revokeObjectURL(a.href);
-}
-
-// Sensor register access (colour tuning). page/reg/value accept 0x-hex or
-// decimal; results echo into the value box + the log.
-function cameraRegParse(id) {
-  const v = parseInt($(id).value.trim(), $(id).value.trim().startsWith('0x') ? 16 : 10);
-  if (!Number.isFinite(v) || v < 0 || v > 255) throw new Error($(id).value + ' は 0..255 で指定してください');
-  return v;
-}
-async function cameraRegAccess(write) {
-  try {
-    const page = cameraRegParse('camera-reg-page');
-    const reg = cameraRegParse('camera-reg-addr');
-    let url = `/api/camera/reg?page=${page}&reg=${reg}`;
-    let opts = {};
-    if (write) {
-      const value = cameraRegParse('camera-reg-value');
-      url += `&value=${value}`;
-      opts = { method: 'POST' };
+void set_voice_db_sink(VoiceDbSink sink)
+{
+    if (g_mutex == nullptr) {
+        g_voice_db_sink = std::move(sink);
+        return;
     }
-    const r = await fetch(url, opts);
-    if (!r.ok) throw new Error('HTTP ' + r.status + ': ' + await r.text());
-    const j = await r.json();
-    $('camera-reg-value').value = '0x' + j.value.toString(16).padStart(2, '0');
-    log(`reg P${j.page}:0x${j.reg.toString(16).padStart(2, '0')} ${write ? '←' : '='} 0x${j.value.toString(16).padStart(2, '0')}`, 'ok');
-  } catch (e) {
-    log('レジスタ アクセス失敗: ' + e.message, 'err');
-  }
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    g_voice_db_sink = std::move(sink);
+    xSemaphoreGive(g_mutex);
 }
 
-$('btn-camera-capture').addEventListener('click', () => cameraCapture(''));
-$('btn-camera-raw').addEventListener('click', () => cameraCapture('?fmt=raw'));
-$('btn-camera-colorbar').addEventListener('click', () => cameraCapture('?test=colorbar'));
-$('btn-camera-save').addEventListener('click', cameraSavePng);
-$('btn-camera-save-raw').addEventListener('click', cameraSaveRawPgm);
-$('btn-camera-reg-read').addEventListener('click', () => cameraRegAccess(false));
-$('btn-camera-reg-write').addEventListener('click', () => cameraRegAccess(true));
-// Dropdown → text input sync so 手入力 and dropdown selection stay coherent.
-$('ota-release-select').addEventListener('change', (e) => {
-  if (e.target.value) $('ota-release-tag').value = e.target.value;
-});
-
-refresh();
-
-// 設定ごとの「再起動が必要 / 即時反映」バッジを /api/reboot-required から
-// データ駆動で付与する。ファーム側 registry の needs_reboot が唯一の情報源なので
-// 手書きヒントのように陳腐化しない。BADGE_FIELDS = registry id → 対象コントロールの
-// DOM id。checkbox は toggle-label ごと、input/select はコントロール直後に置く。
-const BADGE_FIELDS = {
-  'ssid':'ssid', 'password':'password', 'provider':'provider',
-  'xai-token-url':'xai-token-url', 'xai-device-token':'xai-device-token',
-  'operation-mode':'operation-mode', 'audio-output':'audio-output',
-  'lip-sync-mode':'lip-sync-mode', 'led-mouth-sync':'led-mouth-sync',
-  'barge-in':'barge-in-enabled', 'startup-arpeggio':'startup-arpeggio-enabled',
-  'servo-enabled':'servo-enabled', 'battery-gauge':'bat-gauge-enabled',
-  'openai-enabled':'openai-enabled', 'rtp-enabled':'rtp-enabled',
-  'jtts-idle-enabled':'jtts-idle-enabled', 'auth-password':'auth-password',
-  'mcp-token':'mcp-token', 'system-prompt':'system-prompt', 'mic-lip-agc':'mic-lip-agc',
-};
-async function stampRebootBadges() {
-  let reboot;
-  try { reboot = new Set(await (await fetch('/api/reboot-required')).json()); }
-  catch (e) { return; }
-  for (const [rid, dom] of Object.entries(BADGE_FIELDS)) {
-    const el = document.getElementById(dom);
-    if (!el) continue;
-    const anchor = el.closest('label') || el;
-    if (anchor.nextElementSibling && anchor.nextElementSibling.classList &&
-        anchor.nextElementSibling.classList.contains('reboot-badge')) continue;
-    const need = reboot.has(rid);
-    const b = document.createElement('span');
-    b.className = 'reboot-badge';
-    b.textContent = need ? '⟳ 再起動が必要' : '⚡ 即時反映';
-    b.style.cssText = 'display:inline-block;margin:.15em 0 0 .1em;font-size:.72em;' +
-      'padding:.05em .45em;border-radius:4px;vertical-align:middle;' +
-      (need ? 'background:#fdecea;color:#b71c1c;' : 'background:#e8f5e9;color:#1b5e20;');
-    anchor.insertAdjacentElement('afterend', b);
-  }
-}
-stampRebootBadges();
-
-// Android の captive-portal ミニブラウザ (CaptivePortalLogin WebView) は
-// <input type="file"> のファイルピッカーを実装しないため、ローカル OTA の
-// 「ファイル選択」が無反応になる。UA が Android のときは上の注記を表示して
-// Chrome で開き直すよう促す。iOS / PC Chrome には出さない。
-(function warnAndroidFilePicker() {
-  const note = document.getElementById('ota-android-cpl-note');
-  if (!note) return;
-  if (/Android/i.test(navigator.userAgent)) note.hidden = false;
-})();
-
-// ===== Mic lip-sync calibration ============================================
-// Two sliders mirroring the BLE page's chr 0x23 — input gain and output gain
-// as integer percent. Initial read seeds the form; every input event flushes
-// a debounced (150 ms) POST so dragging doesn't hammer NVS. The device
-// persists each accepted value via save_mic_lip_gain.
-let micLipWriteTimer = null;
-let micLipLoaded = false;
-
-async function loadMicLipGain() {
-  try {
-    const r = await fetch('/api/mic-lip-gain');
-    if (!r.ok) return;
-    const j = await r.json();
-    const inPct = (j && Number.isFinite(j.input_pct)) ? j.input_pct : 200;
-    const outPct = (j && Number.isFinite(j.output_pct)) ? j.output_pct : 100;
-    micLipLoaded = false;
-    $('mic-lip-input').value = String(inPct);
-    $('mic-lip-input-value').textContent = String(inPct);
-    $('mic-lip-output').value = String(outPct);
-    $('mic-lip-output-value').textContent = String(outPct);
-    micLipLoaded = true;
-  } catch (e) {
-    log(`mic-lip-gain 読み出し失敗: ${e.message}`, 'err');
-  }
-}
-
-async function writeMicLipGain() {
-  const inPct = parseInt($('mic-lip-input').value, 10) || 100;
-  const outPct = parseInt($('mic-lip-output').value, 10) || 100;
-  try {
-    await fetch('/api/mic-lip-gain', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ input_pct: inPct, output_pct: outPct }),
-    });
-  } catch (e) {
-    log(`mic-lip-gain 書き込み失敗: ${e.message}`, 'err');
-  }
-}
-
-function scheduleMicLipWrite() {
-  if (!micLipLoaded) return;
-  clearTimeout(micLipWriteTimer);
-  micLipWriteTimer = setTimeout(writeMicLipGain, 150);
-}
-
-$('mic-lip-input').addEventListener('input', (e) => {
-  $('mic-lip-input-value').textContent = String(e.target.value);
-  scheduleMicLipWrite();
-});
-$('mic-lip-output').addEventListener('input', (e) => {
-  $('mic-lip-output-value').textContent = String(e.target.value);
-  scheduleMicLipWrite();
-});
-
-loadMicLipGain();
-
-// ===== Speaker volume =======================================================
-// One slider 0..200 %. Same debounced live-write pattern.
-let speakerVolumeWriteTimer = null;
-let speakerVolumeLoaded = false;
-
-async function loadSpeakerVolume() {
-  try {
-    const r = await fetch('/api/speaker-volume');
-    if (!r.ok) return;
-    const j = await r.json();
-    const pct = (j && Number.isFinite(j.pct)) ? j.pct : 100;
-    speakerVolumeLoaded = false;
-    $('speaker-volume').value = String(pct);
-    $('speaker-volume-value').textContent = String(pct);
-    speakerVolumeLoaded = true;
-  } catch (e) {
-    log(`speaker-volume 読み出し失敗: ${e.message}`, 'err');
-  }
-}
-
-async function writeSpeakerVolume() {
-  let pct = parseInt($('speaker-volume').value, 10);
-  if (!Number.isFinite(pct)) pct = 100;
-  if (pct < 0) pct = 0;
-  if (pct > 200) pct = 200;
-  try {
-    await fetch('/api/speaker-volume', {
-      method: 'POST',
-      headers: { 'Content-Type': 'text/plain' },
-      body: String(pct),
-    });
-  } catch (e) {
-    log(`speaker-volume 書き込み失敗: ${e.message}`, 'err');
-  }
-}
-
-function scheduleSpeakerVolumeWrite() {
-  if (!speakerVolumeLoaded) return;
-  clearTimeout(speakerVolumeWriteTimer);
-  speakerVolumeWriteTimer = setTimeout(writeSpeakerVolume, 150);
-}
-
-$('speaker-volume').addEventListener('input', (e) => {
-  $('speaker-volume-value').textContent = String(e.target.value);
-  scheduleSpeakerVolumeWrite();
-});
-
-loadSpeakerVolume();
-
-// ===== JTTS test-speak =====================================================
-// Plain text POST — body is the kana phrase. The device gates this on
-// the same HTTP Basic Auth as the rest of /api/*, distinct from
-// /mcp/say which needs the MCP token.
-async function sayJtts(text) {
-  text = text.trim();
-  if (!text) return;
-  try {
-    const r = await fetch('/api/jtts-say', {
-      method: 'POST',
-      headers: { 'Content-Type': 'text/plain; charset=utf-8' },
-      body: text,
-    });
-    if (r.ok) {
-      log(`jtts 試し発話: 「${text}」`, 'ok');
-    } else {
-      log(`jtts 試し発話 失敗: HTTP ${r.status}`, 'err');
+void set_voice_db_status_getter(VoiceDbStatusGetter getter)
+{
+    if (g_mutex == nullptr) {
+        g_voice_db_status_getter = std::move(getter);
+        return;
     }
-  } catch (e) {
-    log(`jtts 試し発話 失敗: ${e.message}`, 'err');
-  }
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    g_voice_db_status_getter = std::move(getter);
+    xSemaphoreGive(g_mutex);
 }
 
-$('btn-jtts-say').addEventListener('click', () => sayJtts($('jtts-say-text').value));
-$('jtts-say-text').addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') {
-    e.preventDefault();
-    sayJtts(e.target.value);
-  }
-});
+void set_hmm_voice_sink(HmmVoiceSink sink)
+{
+    if (g_mutex == nullptr) {
+        g_hmm_voice_sink = std::move(sink);
+        return;
+    }
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    g_hmm_voice_sink = std::move(sink);
+    xSemaphoreGive(g_mutex);
+}
 
-// ===== Tab switching ========================================================
-// Activates a `.tab-panel` by its data-tab name and persists the choice to
-// localStorage so a reload returns to the same tab. Same pattern as
-// tools/settings.html (BLE) — see plan-md-lucky-dongarra.md. All existing
-// section IDs (#jtts-section, #servo-section etc.) live inside their panels
-// so no JS wiring needs to be touched.
-StackchanSettings.setupTabs('stackchan.settings.wifi.activeTab');
-</script>
-</body>
-</html>
+void set_hmm_voice_status_getter(HmmVoiceStatusGetter getter)
+{
+    if (g_mutex == nullptr) {
+        g_hmm_voice_status_getter = std::move(getter);
+        return;
+    }
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    g_hmm_voice_status_getter = std::move(getter);
+    xSemaphoreGive(g_mutex);
+}
+
+void set_camera_capture_sink(CameraCaptureSink sink)
+{
+    if (g_mutex == nullptr) { g_camera_capture_sink = std::move(sink); return; }
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    g_camera_capture_sink = std::move(sink);
+    xSemaphoreGive(g_mutex);
+}
+void set_camera_reg_sink(CameraRegSink sink)
+{
+    if (g_mutex == nullptr) { g_camera_reg_sink = std::move(sink); return; }
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    g_camera_reg_sink = std::move(sink);
+    xSemaphoreGive(g_mutex);
+}
+void set_mcp_say_kana_sink(McpSayKanaSink sink)
+{
+    if (g_mutex == nullptr) { g_mcp_say_sink = std::move(sink); return; }
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    g_mcp_say_sink = std::move(sink);
+    xSemaphoreGive(g_mutex);
+}
+void set_lt_config_sink(LtConfigSink sink)
+{
+    if (g_mutex == nullptr) { g_lt_config_sink = std::move(sink); return; }
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    g_lt_config_sink = std::move(sink);
+    xSemaphoreGive(g_mutex);
+}
+void set_mcp_expression_sink(McpExpressionSink sink)
+{
+    if (g_mutex == nullptr) { g_mcp_expression_sink = std::move(sink); return; }
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    g_mcp_expression_sink = std::move(sink);
+    xSemaphoreGive(g_mutex);
+}
+void set_mcp_balloon_sink(McpBalloonSink sink)
+{
+    if (g_mutex == nullptr) { g_mcp_balloon_sink = std::move(sink); return; }
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    g_mcp_balloon_sink = std::move(sink);
+    xSemaphoreGive(g_mutex);
+}
+
+} // namespace stackchan::wifi_config::http

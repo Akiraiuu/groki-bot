@@ -12,6 +12,8 @@
 #include <config_service/settings_registry.hpp>
 #include <config_service/staged_config.hpp>
 #include <wifi_config_service/mcp_events.hpp>
+#include <conversation/paid_voice_test.hpp>
+#include <conversation/paid_voice_command.hpp>
 
 #include <algorithm>
 #include <array>
@@ -1624,6 +1626,47 @@ esp_err_t handle_mcp_state_get(httpd_req_t* req)
 
 // --- Audio metrics ---
 
+esp_err_t handle_paid_voice_status(httpd_req_t* req)
+{
+    if (!require_auth(req)) return ESP_OK;
+    const auto s = conversation::paid_voice_test.snapshot(esp_timer_get_time() / 1000);
+    constexpr const char* phases[] = {"idle", "queued", "running", "stopping"};
+    constexpr const char* reasons[] = {"none", "completed", "cancelled", "timeout", "error", "interrupted"};
+    char body[256];
+    std::snprintf(body, sizeof(body),
+        "{\"phase\":\"%s\",\"reason\":\"%s\",\"available\":%s,\"remaining_ms\":%lld,\"max_rounds\":1,\"max_seconds\":60,\"approval_id\":%u}",
+        phases[static_cast<int>(s.phase)], reasons[static_cast<int>(s.reason)], s.available ? "true" : "false",
+        static_cast<long long>(s.remaining_ms), static_cast<unsigned>(s.approval_id));
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    return send_json(req, std::string{body});
+}
+
+esp_err_t handle_paid_voice_control(httpd_req_t* req)
+{
+    if (!require_auth(req)) return ESP_OK;
+    // JSON content type forces cross-origin browser requests through a CORS
+    // preflight; this device does not grant cross-origin control access.
+    char content_type[64]{};
+    if (httpd_req_get_hdr_value_str(req, "Content-Type", content_type, sizeof(content_type)) != ESP_OK ||
+        std::strncmp(content_type, "application/json", 16) != 0)
+        return send_error(req, "415 Unsupported Media Type", "application/json required");
+    std::string body;
+    if (read_body_str(req, body, 256) != ESP_OK) return ESP_OK;
+    auto* root = cJSON_ParseWithLength(body.data(), body.size());
+    const auto command = conversation::parse_paid_voice_command(root);
+    const auto* id = cJSON_GetObjectItemCaseSensitive(root, "approval_id");
+    const auto approval_id = command == conversation::PaidVoiceCommand::Start
+        ? static_cast<std::uint32_t>(id->valuedouble) : 0;
+    cJSON_Delete(root);
+    using Command = conversation::PaidVoiceCommand;
+    if (command == Command::Invalid)
+        return send_error(req, "400 Bad Request", "Explicit paid confirmation, 1 round and 60 seconds required");
+    if (command == Command::Stop) conversation::paid_voice_test.request_stop();
+    else if (!conversation::paid_voice_test.request_start(true, esp_timer_get_time() / 1000, approval_id))
+        return send_error(req, "409 Conflict", "Test unavailable or already active; no new permission granted");
+    return handle_paid_voice_status(req);
+}
+
 // GET /api/metrics/audio — last conversation-turn audio pipeline stats.
 // Returns "{}" when no turn has finished yet (boot fresh / before first
 // reply). Polled by an ops dashboard / phone client; does not require a
@@ -1905,6 +1948,8 @@ void register_handlers(httpd_handle_t server, const config::DeviceConfig& curren
     add(server, "/api/hmm-voice/fetch",  HTTP_POST, handle_hmm_voice_fetch_post);
     add(server, "/api/voices",           HTTP_GET,  handle_voices_get);
     add(server, "/api/metrics/audio",    HTTP_GET,  handle_audio_metrics_get);
+    add(server, "/api/voice-test",       HTTP_GET,  handle_paid_voice_status);
+    add(server, "/api/voice-test",       HTTP_POST, handle_paid_voice_control);
     add(server, "/api/led-state",        HTTP_GET,  handle_led_state_get);
     add(server, "/api/led-state",        HTTP_POST, handle_led_state_post);
     add(server, "/api/mic-lip-gain",     HTTP_GET,  handle_mic_lip_gain_get);

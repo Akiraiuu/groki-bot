@@ -757,6 +757,12 @@
       <label for="xai-device-token">设备访问口令</label>
       <input type="password" id="xai-device-token" maxlength="128" placeholder="独立设备口令；不是 xAI API Key，不修改请留空">
       <p class="hint" id="xai-key-status">通过短期令牌连接已发布的 StopWatch Agent。长期 xAI Key 仅保存在云端。</p>
+      <div id="voice-test-panel">
+        <p class="hint">付费语音测试：需逐次确认，最多 1 轮、60 秒（含连接等待）。完成、停止或超时即断开，不自动重连；开机和保存设置不会启动测试。</p>
+        <button type="button" id="btn-voice-test-start" disabled>确认费用并开始一轮测试</button>
+        <button type="button" id="btn-voice-test-stop">停止并结束会话</button>
+        <p id="voice-test-status" role="status">未连接</p>
+      </div>
 
       <label for="xiaozhi-url">XiaoZhi サーバー URL</label>
       <input type="text" id="xiaozhi-url" maxlength="256" placeholder="ws://192.168.1.10:8000/xiaozhi/v1/">
@@ -1082,6 +1088,49 @@ async function postBinary(path, bytes) {
   }
   return r;
 }
+
+// Polling this local status never contacts xAI. Only the explicitly confirmed
+// button sends start; neither load/save/reboot nor status polling starts a test.
+let voiceTestBusy = false;
+let voiceApprovalId = 0;
+async function refreshVoiceTestStatus() {
+  if (voiceTestBusy || $('provider').value !== '3') return;
+  try {
+    const s = await fetchJSON('/api/voice-test');
+    voiceApprovalId = s.approval_id;
+    const labels = { idle: '未连接', queued: '等待开始', running: '测试中', stopping: '正在断开' };
+    const reasons = { completed: '回复完成', cancelled: '已停止', timeout: '已到时限', error: '发生错误', interrupted: '连接中断' };
+    $('voice-test-status').textContent = `${labels[s.phase] || '状态未知'}${s.phase === 'idle' && reasons[s.reason] ? ' · ' + reasons[s.reason] : ''}${s.phase === 'running' || s.phase === 'queued' ? ' · 剩余 ' + Math.ceil(s.remaining_ms / 1000) + ' 秒' : ''}${!s.available ? ' · 请保存为 Grok 对话模式后重启' : ''}`;
+    $('btn-voice-test-start').disabled = !s.available || s.phase !== 'idle';
+  } catch (_) {
+    $('btn-voice-test-start').disabled = true;
+    $('voice-test-status').textContent = '无法确认设备状态；未启动测试';
+  }
+}
+$('btn-voice-test-start').addEventListener('click', async () => {
+  if (voiceTestBusy) return;
+  const approvalId = voiceApprovalId;
+  const ok = window.confirm('本次会调用 xAI 付费 API，包括 Agent 可能调用的已启用搜索工具。\n最多 1 轮回复、60 秒（含连接等待）；完成、停止、超时或出错后断开，不自动重连。\n确认承担本次费用并立即开始吗？');
+  if (!ok) return;
+  voiceTestBusy = true;
+  $('btn-voice-test-start').disabled = true;
+  try {
+    const r = await fetch('/api/voice-test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ op: 'start', confirm_paid: true, max_rounds: 1, max_seconds: 60, approval_id: approvalId }) });
+    if (!r.ok) throw new Error(`设备拒绝启动 (${r.status})`);
+    $('voice-test-status').textContent = '已确认本次费用，正在开始测试';
+  } catch (e) {
+    $('voice-test-status').textContent = '启动结果未确认，请点“停止并结束会话”并检查设备；不会自动重试';
+  } finally { voiceTestBusy = false; }
+});
+$('btn-voice-test-stop').addEventListener('click', async () => {
+  // Stop remains available while a start request is pending.
+  try {
+    const r = await fetch('/api/voice-test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ op: 'stop' }) });
+    if (!r.ok) throw new Error('stop_failed');
+    $('voice-test-status').textContent = '已请求停止，正在确认断开';
+  } catch (_) { $('voice-test-status').textContent = '停止未确认，请将设备彻底关机'; }
+});
+setInterval(refreshVoiceTestStatus, 1000);
 
 function setFlag(id, on) {
   $(id).classList.toggle('set', !!on);

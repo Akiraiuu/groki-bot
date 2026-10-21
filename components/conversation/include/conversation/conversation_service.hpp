@@ -61,6 +61,9 @@ struct ConversationConfig {
     std::uint32_t vad_silence_ms{500};
     std::uint32_t vad_prefix_padding_ms{300};
     float vad_threshold{0.5f};
+    // Saved-Agent transport must check a live RAM-only permission before
+    // opening the socket, queueing audio and each actual network write.
+    std::function<bool()> session_permitted;
 };
 
 enum class ConversationEventType : std::uint8_t {

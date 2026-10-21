@@ -96,6 +96,9 @@ int main() {
     ConversationConfig cfg;
     cfg.agent_id = "agent_test_only";
     cfg.extra_headers = "Authorization: Bearer must-not-replace-token";
+    assert(!client.start(cfg)); // A credential alone is not paid-test permission.
+    bool permitted = true;
+    cfg.session_permitted = [&] { return permitted; };
     assert(client.start(cfg));
     assert(host_socket->uri == "wss://api.x.ai/v1/realtime?agent_id=agent_test_only");
     assert(host_socket->headers.at("Authorization") == "Bearer fake-ephemeral-token");
@@ -105,6 +108,9 @@ int main() {
     assert(client.state() == ConversationState::Connecting && host_socket->sent.size() == 2);
     host_receive(confirmed);
     assert(client.state() == ConversationState::Listening);
+    permitted = false;
+    assert(!client.push_audio(std::array<std::int16_t, 960>{}));
+    permitted = true;
     std::array<std::int16_t, 960> pcm{};
     pcm[0] = 0x1234; pcm[1] = -52;
     assert(client.push_audio(pcm));
@@ -134,6 +140,7 @@ int main() {
     host_receive(R"({"type":"response.output_audio.delta","delta":"NBLM/w=="})");
     assert(events.back().audio && events.back().audio->size() == 2);
     assert(events.back().audio->at(0) == 0x1234 && events.back().audio->at(1) == -52);
+    assert(events.back().emit_us == esp_timer_get_time());
     host_receive(R"({"type":"response.done","response":{"status":"completed"}})");
     assert(client.state() == ConversationState::Listening);
     host_receive(R"({"type":"response.function_call_arguments.done","name":"x_search_arbitrary","call_id":"bad"})");

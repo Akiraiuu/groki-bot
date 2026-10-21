@@ -85,3 +85,10 @@ target_include_directories(conversation_test_saved_agent PRIVATE
 target_compile_definitions(conversation_test_saved_agent PRIVATE CONFIG_STACKCHAN_CONV_WS_RX_BUFFER=131072)
 target_link_libraries(conversation_test_saved_agent PRIVATE cjson_host ${MBEDCRYPTO_LIBRARY})
 add_test(NAME saved_agent COMMAND conversation_test_saved_agent)
+
+find_package(Threads REQUIRED)
+add_executable(conversation_test_paid_voice_test test_paid_voice_test.cpp)
+target_include_directories(conversation_test_paid_voice_test PRIVATE ${CONVERSATION_ROOT}/include)
+target_link_libraries(conversation_test_paid_voice_test PRIVATE cjson_host Threads::Threads)
+target_compile_options(conversation_test_paid_voice_test PRIVATE -Wall -Wextra)
+add_test(NAME paid_voice_test COMMAND conversation_test_paid_voice_test)

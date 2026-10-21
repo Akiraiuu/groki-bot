@@ -130,6 +130,9 @@ public:
             config_.output_sample_rate_hz != 24000 || api_key_.empty())) {
             return tl::unexpected{ConversationError::ProtocolError};
         }
+        if (!config_.agent_id.empty() && (!config_.session_permitted || !config_.session_permitted())) {
+            return tl::unexpected{ConversationError::InvalidState};
+        }
         saved_confirmations_ = 0;
         server_web_ = server_x_ = server_file_ = false;
         custom_tool_names_.clear();
@@ -221,7 +224,7 @@ public:
             return tl::unexpected{ConversationError::TransportInit};
         }
 
-        if (esp_websocket_client_start(client_) != ESP_OK) {
+        if (!session_permitted() || esp_websocket_client_start(client_) != ESP_OK) {
             teardown();
             return tl::unexpected{ConversationError::TransportInit};
         }
@@ -232,6 +235,7 @@ public:
 
     tl::expected<void, ConversationError> push_audio(std::span<const std::int16_t> pcm)
     {
+        if (!session_permitted()) return tl::unexpected{ConversationError::InvalidState};
         const auto state = state_.load(std::memory_order_relaxed);
         const bool saved_agent_waiting = !config_.agent_id.empty() && state == ConversationState::Thinking;
         if (state != ConversationState::Listening && !saved_agent_waiting) {
@@ -456,6 +460,7 @@ private:
     // teardown will flush whatever is left in the queue.
     void send_one_chunk(AudioChunk* chunk)
     {
+        if (!session_permitted()) return;
         if (client_ == nullptr) return;
         if (!esp_websocket_client_is_connected(client_)) return;
 
@@ -483,6 +488,7 @@ private:
         int send_rc;
         {
             std::lock_guard lock{send_mutex_};
+            if (!session_permitted()) return;
             send_rc = esp_websocket_client_send_text(client_, json_scratch_.data(), n, kSendTimeout);
         }
         const std::uint32_t dt =
@@ -520,7 +526,9 @@ private:
     void emit(const ConversationEvent& ev)
     {
         if (event_callback_) {
-            event_callback_(ev);
+            auto stamped = ev;
+            if (stamped.emit_us == 0) stamped.emit_us = esp_timer_get_time();
+            event_callback_(stamped);
         }
     }
 
@@ -606,8 +614,14 @@ private:
         }
     }
 
+    bool session_permitted() const
+    {
+        return config_.agent_id.empty() || (config_.session_permitted && config_.session_permitted());
+    }
+
     bool send_json(cJSON* root)
     {
+        if (!session_permitted()) return false;
         char* text = cJSON_PrintUnformatted(root);
         if (text == nullptr) {
             return false;

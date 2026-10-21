@@ -17,6 +17,7 @@
 #include <esp_heap_caps.h>
 #include <esp_log.h>
 #include <esp_timer.h>
+#include <esp_random.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/idf_additions.h>
 #include <freertos/queue.h>
@@ -30,6 +31,7 @@
 #include "conversation/metrics.hpp"
 #include "conversation/openai_realtime_client.hpp"
 #include "conversation/saved_agent.hpp"
+#include "conversation/paid_voice_test.hpp"
 #include "conversation/xiaozhi_client.hpp"
 #include "led_runtime.hpp"
 #include "utf8.hpp"
@@ -296,6 +298,10 @@ public:
         }
         client_->set_event_callback([this](const conv::ConversationEvent& ev) { enqueue_event(ev); });
 
+        if (provider_ == config::Provider::Grok) {
+            run_paid_voice_tests();
+            return;
+        }
         (void)connect_with_retries("initial connect", /*allow_audio_abort=*/false);
 
         for (;;) {
@@ -343,6 +349,58 @@ public:
     }
 
 private:
+    // Every paid test has one explicit local request, one connection attempt,
+    // one reply and a deadline starting at confirmation. Nothing is persisted.
+    void run_paid_voice_tests()
+    {
+        using Test = conv::PaidVoiceTest;
+        conv::paid_voice_test.set_available(true, esp_random());
+        state_.conv.status.store(ConvStatus::Disabled, std::memory_order_relaxed);
+        state_.set_balloon_text("语音未连接，请先确认测试费用", 5000);
+        for (;;) {
+            if (!conv::paid_voice_test.claim(esp_timer_get_time() / 1000)) {
+                if (conv::paid_voice_test.snapshot(esp_timer_get_time() / 1000).phase == Test::Phase::Stopping)
+                    conv::paid_voice_test.finish();
+                vTaskDelay(pdMS_TO_TICKS(50));
+                continue;
+            }
+            paid_input_closed_ = false;
+            state_.set_balloon_text("付费语音测试：1轮，最多60秒", 5000);
+            // Wi-Fi wait consumes the same budget. No token is requested yet.
+            while (!wifi_is_connected() && conv::paid_voice_test.permitted(esp_timer_get_time() / 1000))
+                vTaskDelay(pdMS_TO_TICKS(50));
+            if (conv::paid_voice_test.permitted(esp_timer_get_time() / 1000) && !connect())
+                conv::paid_voice_test.request_stop(Test::Reason::Error);
+            while (conv::paid_voice_test.permitted(esp_timer_get_time() / 1000)) {
+                if (!wifi_is_connected() || state_.audio_stream_active.load(std::memory_order_acquire)) {
+                    conv::paid_voice_test.request_stop(Test::Reason::Interrupted);
+                    break;
+                }
+                drain_events();
+                if (conv::paid_voice_test.permitted(esp_timer_get_time() / 1000)) service_state();
+            }
+            // Revoke permission before releasing any transport. Queued audio
+            // cannot pass the sender's final per-write permission check.
+            conv::paid_voice_test.request_stop(Test::Reason::Timeout);
+            M5.Mic.end();
+            M5.Speaker.end();
+            client_->stop();
+            flush_events();
+            assistant_pcm_.clear();
+            assistant_text_.clear();
+            pending_chunks_.clear();
+            audio_complete_ = false;
+            set_local(Local::Init);
+            state_.conv.active.store(false, std::memory_order_relaxed);
+            state_.conv.idle.store(false, std::memory_order_relaxed);
+            state_.conv.status.store(ConvStatus::Disabled, std::memory_order_relaxed);
+            state_.face.mouth_open.store(0.0f, std::memory_order_relaxed);
+            state_.set_balloon_text("测试结束，语音连接已关闭", 5000);
+            conv::paid_voice_test.finish();
+            ESP_LOGI(kTag, "paid voice test ended; connection closed, no automatic retry");
+        }
+    }
+
     // ---- event bridge: WS task -> this task --------------------------------
 
     void enqueue_event(const conv::ConversationEvent& ev)
@@ -358,7 +416,8 @@ private:
     {
         conv::ConversationEvent* ev = nullptr;
         while (xQueueReceive(event_queue_, &ev, 0) == pdTRUE) {
-            handle_event(*ev);
+            if (provider_ != config::Provider::Grok ||
+                conv::paid_voice_test.permitted(esp_timer_get_time() / 1000)) handle_event(*ev);
             delete ev;
         }
     }
@@ -396,12 +455,16 @@ private:
     {
         conv::ConversationConfig cfg{};
         if (provider_ == config::Provider::Grok) {
+            if (!conv::paid_voice_test.permitted(esp_timer_get_time() / 1000)) return false;
             const auto& broker = xai_token_url_.empty() ? std::string(conv::kSavedAgentTokenUrl) : xai_token_url_;
             auto ticket = conv::fetch_agent_ticket(broker, xai_device_token_);
             if (!ticket) {
                 ESP_LOGW(kTag, "saved Agent token request failed (code=%d)", static_cast<int>(ticket.error()));
                 return false;
             }
+            if (!conv::paid_voice_test.permitted(esp_timer_get_time() / 1000)) return false;
+            const auto test_id = conv::paid_voice_test.snapshot(esp_timer_get_time() / 1000).approval_id;
+            cfg.session_permitted = [test_id] { return conv::paid_voice_test.permitted(esp_timer_get_time() / 1000, test_id); };
             cfg.agent_id = std::move(ticket->agent_id);
             // Reconnect always creates a new transport with a freshly issued token.
             client_ = std::make_unique<conv::OpenAiRealtimeClient>(std::move(ticket->token), conv::RealtimeBackend::Xai);
@@ -520,6 +583,10 @@ private:
     // reconnect flow (teardown old client + dma settle + connect).
     void recover_after_error(bool from_failure = true)
     {
+        if (provider_ == config::Provider::Grok) {
+            conv::paid_voice_test.request_stop(conv::PaidVoiceTest::Reason::Error);
+            return;
+        }
         if (from_failure) {
             ++consecutive_recover_failures_;
             // capped at 30 s. After the n-th failure the backoff is 500 ms × 2^(n-1), i.e.
@@ -700,7 +767,9 @@ private:
             if (now_ms() - playback_start_ms_ > kSpeakingTimeoutMs) {
                 ESP_LOGW(kTag, "speaking timed out (%u ms), forcing finish",
                          static_cast<unsigned>(now_ms() - playback_start_ms_));
-                finish_speaking();
+                if (provider_ == config::Provider::Grok)
+                    conv::paid_voice_test.request_stop(conv::PaidVoiceTest::Reason::Timeout);
+                else finish_speaking();
             } else {
                 service_playback();
             }
@@ -772,6 +841,10 @@ private:
 
     void barge_in()
     {
+        if (provider_ == config::Provider::Grok) {
+            conv::paid_voice_test.request_stop(conv::PaidVoiceTest::Reason::Cancelled);
+            return;
+        }
         ESP_LOGI(kTag, "barge-in: user touched the head, interrupting reply");
         M5.Speaker.stop();
         (void)client_->cancel_response();
@@ -788,7 +861,19 @@ private:
     void service_mic()
     {
         if (M5.Mic.isRecording() < 2) {
-            const auto& buf = mic_buf_[mic_read_];
+            auto& buf = mic_buf_[mic_read_];
+            if (provider_ == config::Provider::Grok && paid_input_closed_) {
+                // Keep VAD's silence clock moving after the first utterance,
+                // without letting new room noise create further billable turns.
+                std::fill(buf.begin(), buf.end(), 0);
+            }
+            if (provider_ == config::Provider::Grok && mic_settle_samples_ != 0) {
+                // Preserve the stream cadence while the codec/DC filter settles
+                // after switching from the speaker. Do not send its power transient.
+                const auto n = std::min(mic_settle_samples_, buf.size());
+                std::fill_n(buf.begin(), n, 0);
+                mic_settle_samples_ -= n;
+            }
             const auto pushed = client_->push_audio(std::span<const std::int16_t>{buf.data(), buf.size()});
             if (provider_ == config::Provider::Grok) {
                 // Numeric-only diagnostics: no recording, transcript or token.
@@ -842,6 +927,7 @@ private:
         // can't immediately re-trigger now that we're listening again.
         state_.barge_in_request.store(false, std::memory_order_relaxed);
         // Prime the 2-deep mic queue.
+        mic_settle_samples_ = provider_ == config::Provider::Grok ? mic_sample_rate_ * 160u / 1000u : 0;
         M5.Mic.record(mic_buf_[0].data(), mic_buf_[0].size(), mic_sample_rate_, /*stereo=*/false);
         M5.Mic.record(mic_buf_[1].data(), mic_buf_[1].size(), mic_sample_rate_, /*stereo=*/false);
         mic_read_ = 0;
@@ -897,6 +983,11 @@ private:
 
     void finish_speaking()
     {
+        if (provider_ == config::Provider::Grok) {
+            log_playback_metrics();
+            conv::paid_voice_test.request_stop(conv::PaidVoiceTest::Reason::Completed);
+            return;
+        }
         M5.Speaker.end();
         vTaskDelay(kI2sSettle);
         state_.face.mouth_open.store(0.0f, std::memory_order_relaxed);
@@ -1015,6 +1106,7 @@ private:
             break;
 
         case conv::ConversationEventType::SpeechStopped:
+            if (provider_ == config::Provider::Grok) paid_input_closed_ = true;
             ESP_LOGI(kTag, "user speech stopped");
             if (local_ == Local::Listening) {
                 set_local(Local::Thinking);
@@ -1100,11 +1192,17 @@ private:
                 thinking_face_released_ = false;
             } else if (local_ == Local::Thinking && assistant_pcm_.empty()) {
                 // Text-only or empty turn: nothing will switch us to Speaking.
-                enter_listening();
+                if (provider_ == config::Provider::Grok)
+                    conv::paid_voice_test.request_stop(conv::PaidVoiceTest::Reason::Completed);
+                else enter_listening();
             }
             break;
 
         case conv::ConversationEventType::Error: {
+            if (provider_ == config::Provider::Grok) {
+                conv::paid_voice_test.request_stop(conv::PaidVoiceTest::Reason::Error);
+                break;
+            }
             // Transport errors (disconnect / handshake) are fatal — the
             // session is gone and must be rebuilt. Server-side errors (bad
             // request, a no-op cancellation, rate-limit notices, …) leave the
@@ -1370,6 +1468,8 @@ private:
     std::array<std::vector<std::int16_t>, 2> mic_buf_{};
     int mic_read_{0};
     std::uint32_t mic_window_frames_{0}, mic_window_samples_{0}, mic_window_clipped_{0};
+    std::size_t mic_settle_samples_{0};
+    bool paid_input_closed_{false};
     std::uint32_t mic_window_send_errors_{0}, mic_window_record_errors_{0}, mic_window_since_ms_{0};
     std::int64_t mic_window_energy_{0};
     int mic_window_peak_{0};

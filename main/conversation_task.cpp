@@ -958,13 +958,12 @@ private:
     // slot frees, push that chunk upstream and re-queue it.
     void service_mic()
     {
+        if (provider_ == config::Provider::Grok && !paid_input_.open()) {
+            vTaskDelay(pdMS_TO_TICKS(5));
+            return;
+        }
         if (M5.Mic.isRecording() < 2) {
             auto& buf = mic_buf_[mic_read_];
-            if (provider_ == config::Provider::Grok && !paid_input_.open()) {
-                // Keep VAD's silence clock moving after a recognized utterance,
-                // without letting new room noise create further billable turns.
-                std::fill(buf.begin(), buf.end(), 0);
-            }
             if (provider_ == config::Provider::Grok && mic_settle_samples_ != 0) {
                 // Preserve the stream cadence while the codec/DC filter settles
                 // after switching from the speaker. Do not send its power transient.
@@ -1214,6 +1213,10 @@ private:
             break;
 
         case conv::ConversationEventType::UserTranscript:
+            if (provider_ == config::Provider::Grok && !paid_input_.open()) {
+                M5.Mic.end();
+                ESP_LOGI(kTag, "recognized input complete; microphone and queued uplink stopped");
+            }
             ESP_LOGI(kTag, "user: %s", ev.text.c_str());
             state_.note_face_activity();
             if (!ev.text.empty()) {

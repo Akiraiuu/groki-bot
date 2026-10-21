@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: BSL-1.0
 #include <array>
+#include <algorithm>
 #include <cassert>
 #include <ctime>
 #include <cstring>
@@ -20,6 +21,17 @@ std::string ticket_json(std::string id = "agent_test_only", double expiry = std:
     std::string result(text); cJSON_free(text); cJSON_Delete(root); return result;
 }
 const std::string confirmed = R"({"type":"session.updated","session":{"audio":{"input":{"format":{"type":"audio/pcm","rate":24000}},"output":{"format":{"type":"audio/pcm","rate":24000}}},"tools":[{"type":"web_search"},{"type":"x_search"}]}})";
+void receive_fragmented(std::string json, std::size_t step = 8192) {
+    for (std::size_t offset = 0; offset < json.size(); offset += step) {
+        esp_websocket_event_data_t data{};
+        data.data_len = static_cast<int>(std::min(step, json.size() - offset));
+        data.payload_len = static_cast<int>(json.size());
+        data.payload_offset = static_cast<int>(offset);
+        data.op_code = 1;
+        data.data_ptr = json.data() + offset;
+        host_socket->callback(host_socket->arg, nullptr, WEBSOCKET_EVENT_DATA, &data);
+    }
+}
 int main() {
     auto* audio_event = cJSON_Parse(confirmed.c_str());
     auto* audio_session = cJSON_GetObjectItemCaseSensitive(audio_event, "session");
@@ -137,10 +149,43 @@ int main() {
         assert(events.size() == count);
     }
     host_receive(R"({"type":"response.created","response":{"id":"r1"}})");
+    // VAD-only/blank events do not stop input; a recognized utterance does.
+    host_receive(R"({"type":"conversation.item.input_audio_transcription.completed","transcript":" \t"})");
+    assert(client.push_audio(pcm));
+    assert(xQueueReceive(host_last_queue, &queued, 0));
+    heap_caps_free(queued);
+    host_receive(R"({"type":"conversation.item.input_audio_transcription.completed","transcript":"test phrase"})");
+    assert(client.push_audio(pcm));
+    assert(!xQueueReceive(host_last_queue, &queued, 0));
+    host_receive(R"({"type":"input_audio_buffer.speech_started"})");
+    assert(client.push_audio(pcm));
+    assert(!xQueueReceive(host_last_queue, &queued, 0)); // No reopening in this session.
     host_receive(R"({"type":"response.output_audio.delta","delta":"NBLM/w=="})");
     assert(events.back().audio && events.back().audio->size() == 2);
     assert(events.back().audio->at(0) == 0x1234 && events.back().audio->at(1) == -52);
     assert(events.back().emit_us == esp_timer_get_time());
+    // Regression: a real 162809-byte server audio frame was dropped at 128 KiB.
+    const auto large_audio = std::string(R"({"type":"response.output_audio.delta","delta":")") +
+                             std::string(162760, 'A') + R"("})";
+    assert(large_audio.size() > 131072);
+    receive_fragmented(large_audio);
+    assert(events.back().type == ConversationEventType::AssistantAudioChunk);
+    assert(events.back().audio && events.back().audio->size() == 61035);
+    assert(events.back().audio->front() == 0 && events.back().audio->back() == 0);
+    auto error_count = [&] {
+        return std::count_if(events.begin(), events.end(), [](const auto& e) { return e.type == ConversationEventType::Error; });
+    };
+    auto errors = error_count();
+    receive_fragmented(std::string(1024 * 1024, 'x'));
+    assert(error_count() == errors + 1); // One error per rejected frame, not per fragment.
+    host_fail_heap_alloc_at_least = 512 * 1024;
+    errors = error_count();
+    receive_fragmented(std::string(300000, 'x'));
+    assert(error_count() == errors + 1);
+    assert(events.back().error == ConversationError::OutOfMemory);
+    host_fail_heap_alloc_at_least = static_cast<std::size_t>(-1);
+    host_receive(R"({"type":"response.output_audio.delta","delta":"NBLM/w=="})");
+    assert(events.back().audio && events.back().audio->size() == 2); // Old buffer survives failed growth.
     host_receive(R"({"type":"response.done","response":{"status":"completed"}})");
     assert(client.state() == ConversationState::Listening);
     host_receive(R"({"type":"response.function_call_arguments.done","name":"x_search_arbitrary","call_id":"bad"})");
@@ -149,6 +194,9 @@ int main() {
 
     // An explicit same-name client declaration overrides native classification.
     assert(client.start(cfg)); host_connected(); host_receive(confirmed);
+    assert(client.push_audio(pcm)); // Explicit new session resets the input gate.
+    assert(xQueueReceive(host_last_queue, &queued, 0));
+    heap_caps_free(queued);
     auto* root = cJSON_Parse(confirmed.c_str());
     auto* tools = cJSON_GetObjectItemCaseSensitive(cJSON_GetObjectItemCaseSensitive(root,"session"), "tools");
     auto* custom = cJSON_CreateObject();

@@ -21,7 +21,10 @@ constexpr unsigned MALLOC_CAP_SPIRAM = 1, MALLOC_CAP_8BIT = 2;
 #define ESP_LOGI(...) ((void)0)
 #define ESP_LOGW(...) ((void)0)
 #define ESP_LOGE(...) ((void)0)
-inline void* heap_caps_malloc(std::size_t n, unsigned) { return std::malloc(n); }
+inline std::size_t host_fail_heap_alloc_at_least = static_cast<std::size_t>(-1);
+inline void* heap_caps_malloc(std::size_t n, unsigned) {
+    return n >= host_fail_heap_alloc_at_least ? nullptr : std::malloc(n);
+}
 inline void heap_caps_free(void* p) { std::free(p); }
 inline std::int64_t esp_timer_get_time() { return 1000000; }
 inline int esp_crt_bundle_attach(void*) { return 0; }

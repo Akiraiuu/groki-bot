@@ -3,6 +3,7 @@
 
 #include "conversation/openai_realtime_client.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <cstdio>
 #include <cstring>
@@ -41,6 +42,9 @@ constexpr const char* kRealtimeUriPrefix = "wss://api.openai.com/v1/realtime?mod
 // At 8 kHz µ-law a 40 ms chunk is 320 bytes; 1024 leaves headroom for any
 // future change without re-sizing on the hot path.
 constexpr std::size_t kMaxChunkBytes = 2048; // includes 40 ms PCM16/24 kHz = 1920 B
+// Saved-Agent audio deltas can exceed the default 128 KiB JSON buffer.
+// Grow PSRAM reassembly on demand, with room for a trailing NUL and a hard cap.
+constexpr std::size_t kMaxSavedAgentRxBytes = 1024 * 1024;
 
 // Per-send timeout for the WS write inside the sender task. The mic loop no
 // longer blocks on this — it enqueues into the audio tx ring and returns
@@ -138,12 +142,13 @@ public:
         custom_tool_names_.clear();
         response_active_.store(false, std::memory_order_relaxed);
         discard_response_.store(false, std::memory_order_relaxed);
+        input_finished_.store(false, std::memory_order_release);
         fn_args_.clear();
         output_is_ulaw_ = (config_.output_sample_rate_hz == kG711SampleRate);
         tx_evicted_total_.store(0, std::memory_order_relaxed);
         last_evict_log_ms_ = 0;
 
-        const std::size_t rx_cap = static_cast<std::size_t>(CONFIG_STACKCHAN_CONV_WS_RX_BUFFER);
+        const std::size_t rx_cap = std::max<std::size_t>(1, CONFIG_STACKCHAN_CONV_WS_RX_BUFFER);
         rx_buffer_ = static_cast<char*>(heap_caps_malloc(rx_cap, MALLOC_CAP_SPIRAM));
         if (rx_buffer_ == nullptr) {
             return tl::unexpected{ConversationError::OutOfMemory};
@@ -151,6 +156,8 @@ public:
         rx_capacity_ = rx_cap;
         rx_len_ = 0;
         rx_op_code_ = 0;
+        rx_drop_frame_ = false;
+        rx_total_ = 0;
 
         const std::size_t b64_cap = base64::encoded_size(kMaxChunkBytes);
         b64_scratch_.assign(b64_cap, '\0');
@@ -236,6 +243,7 @@ public:
     tl::expected<void, ConversationError> push_audio(std::span<const std::int16_t> pcm)
     {
         if (!session_permitted()) return tl::unexpected{ConversationError::InvalidState};
+        if (input_finished_.load(std::memory_order_acquire)) return {};
         const auto state = state_.load(std::memory_order_relaxed);
         const bool saved_agent_waiting = !config_.agent_id.empty() && state == ConversationState::Thinking;
         if (state != ConversationState::Listening && !saved_agent_waiting) {
@@ -460,6 +468,7 @@ private:
     // teardown will flush whatever is left in the queue.
     void send_one_chunk(AudioChunk* chunk)
     {
+        if (input_finished_.load(std::memory_order_acquire)) return;
         if (!session_permitted()) return;
         if (client_ == nullptr) return;
         if (!esp_websocket_client_is_connected(client_)) return;
@@ -488,7 +497,7 @@ private:
         int send_rc;
         {
             std::lock_guard lock{send_mutex_};
-            if (!session_permitted()) return;
+            if (!session_permitted() || input_finished_.load(std::memory_order_acquire)) return;
             send_rc = esp_websocket_client_send_text(client_, json_scratch_.data(), n, kSendTimeout);
         }
         const std::uint32_t dt =
@@ -525,6 +534,12 @@ private:
 
     void emit(const ConversationEvent& ev)
     {
+        // A final, nonblank transcript proves server VAD has finalized input.
+        // Stop queued microphone/silence writes before receiving the reply.
+        // Raw VAD boundaries and blank transcripts MUST NOT close this gate.
+        if (!config_.agent_id.empty() && ev.type == ConversationEventType::UserTranscript &&
+            ev.text.find_first_not_of(" \t\r\n\f\v") != std::string::npos)
+            input_finished_.store(true, std::memory_order_release);
         if (event_callback_) {
             auto stamped = ev;
             if (stamped.emit_us == 0) stamped.emit_us = esp_timer_get_time();
@@ -587,24 +602,44 @@ private:
         if (data->payload_offset == 0) {
             rx_len_ = 0;
             rx_op_code_ = data->op_code;
+            rx_drop_frame_ = false;
+            rx_total_ = data->payload_len > 0 ? static_cast<std::size_t>(data->payload_len) : 0;
         }
         if (rx_op_code_ != 0x01) {
             return; // not a text message (ping/pong/binary/close)
         }
+        if (rx_drop_frame_) return;
         const std::size_t total = static_cast<std::size_t>(data->payload_len);
-        if (total >= rx_capacity_) {
-            ESP_LOGE(kTag, "RX frame too large (%u >= %u), dropped", static_cast<unsigned>(total),
-                     static_cast<unsigned>(rx_capacity_));
-            rx_len_ = 0;
-            emit_error(ConversationError::ProtocolError, "rx frame too large");
-            return;
-        }
         const std::size_t chunk = static_cast<std::size_t>(data->data_len);
-        if (rx_len_ + chunk >= rx_capacity_) {
-            rx_len_ = 0;
+        if (data->payload_offset < 0 || total != rx_total_ ||
+            static_cast<std::size_t>(data->payload_offset) != rx_len_ ||
+            rx_len_ > total || chunk > total - rx_len_ || (chunk && !data->data_ptr)) {
+            rx_drop_frame_ = true;
+            emit_error(ConversationError::ProtocolError, "invalid rx fragment");
             return;
         }
-        std::memcpy(rx_buffer_ + rx_len_, data->data_ptr, chunk);
+        if (total >= rx_capacity_) {
+            if (config_.agent_id.empty() || total >= kMaxSavedAgentRxBytes) {
+                rx_drop_frame_ = true;
+                ESP_LOGE(kTag, "RX frame exceeds limit (%u bytes)", static_cast<unsigned>(total));
+                emit_error(ConversationError::ProtocolError, "rx frame too large");
+                return;
+            }
+            auto capacity = rx_capacity_;
+            while (capacity <= total) capacity = std::min(capacity * 2, kMaxSavedAgentRxBytes);
+            auto* grown = static_cast<char*>(heap_caps_malloc(capacity, MALLOC_CAP_SPIRAM));
+            if (!grown) {
+                rx_drop_frame_ = true;
+                emit_error(ConversationError::OutOfMemory, "rx buffer growth failed");
+                return;
+            }
+            if (rx_len_) std::memcpy(grown, rx_buffer_, rx_len_);
+            heap_caps_free(rx_buffer_);
+            rx_buffer_ = grown;
+            rx_capacity_ = capacity;
+            ESP_LOGI(kTag, "RX PSRAM buffer grown to %u bytes", static_cast<unsigned>(capacity));
+        }
+        if (chunk) std::memcpy(rx_buffer_ + rx_len_, data->data_ptr, chunk);
         rx_len_ += chunk;
 
         if (rx_len_ >= total && total > 0) {
@@ -911,12 +946,15 @@ private:
     bool pending_tool_call_{false};
     bool output_is_ulaw_{false};            // wire codec for assistant audio (g711_ulaw vs pcm16)
     std::atomic<bool> response_active_{false}; // a response is mid-generation (set/cleared from the WS task)
+    std::atomic<bool> input_finished_{false}; // saved-Agent final recognized input; reset only by start()
 
     // RX frame reassembly (PSRAM).
     char* rx_buffer_{nullptr};
     std::size_t rx_capacity_{0};
     std::size_t rx_len_{0};
     std::uint8_t rx_op_code_{0};
+    bool rx_drop_frame_{false};
+    std::size_t rx_total_{0};
 
     // Hot-path scratch for input_audio_buffer.append. Storage lives in PSRAM
     // (via PsramAllocator) so the ~6 KiB combined doesn't eat the internal

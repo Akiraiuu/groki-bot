@@ -1,12 +1,46 @@
 // SPDX-License-Identifier: BSL-1.0
 #pragma once
 #include <cmath>
+#include <cstdint>
 #include <cstring>
+#include <optional>
 #include <string_view>
 #include <cJSON.h>
 #include "conversation/saved_agent.hpp"
 
 namespace stackchan::conversation {
+// IMF-fixdate from the certificate-verified broker response; independent of TZ.
+// Never use an HTTP Date from a redirect or a failed TLS/HTTP request.
+inline std::optional<std::int64_t> saved_agent_http_date(std::string_view date) {
+    if (date.size() != 29 || date[3] != ',' || date[4] != ' ' || date[7] != ' ' ||
+        date[11] != ' ' || date[16] != ' ' || date[19] != ':' || date[22] != ':' ||
+        date.substr(25) != " GMT") return std::nullopt;
+    auto number = [&](std::size_t offset, std::size_t length) {
+        int result = 0;
+        for (std::size_t i = offset; i < offset + length; ++i) {
+            if (date[i] < '0' || date[i] > '9') return -1;
+            result = result * 10 + date[i] - '0';
+        }
+        return result;
+    };
+    constexpr std::string_view months[] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
+    constexpr std::string_view weekdays[] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
+    int month = -1, weekday = -1;
+    for (int i = 0; i < 12; ++i) if (date.substr(8, 3) == months[i]) month = i;
+    for (int i = 0; i < 7; ++i) if (date.substr(0, 3) == weekdays[i]) weekday = i;
+    const int year = number(12, 4), day = number(5, 2), hour = number(17, 2), minute = number(20, 2), second = number(23, 2);
+    if (year < 2025 || year > 2099 || month < 0 || weekday < 0 || day < 1 ||
+        hour < 0 || hour > 23 || minute < 0 || minute > 59 || second < 0 || second > 59) return std::nullopt;
+    auto leap = [](int y) { return y % 4 == 0 && (y % 100 != 0 || y % 400 == 0); };
+    constexpr int month_days[] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+    if (day > month_days[month] + (month == 1 && leap(year) ? 1 : 0)) return std::nullopt;
+    std::int64_t days = 0;
+    for (int y = 1970; y < year; ++y) days += leap(y) ? 366 : 365;
+    for (int m = 0; m < month; ++m) days += month_days[m] + (m == 1 && leap(year) ? 1 : 0);
+    days += day - 1;
+    if ((days + 4) % 7 != weekday) return std::nullopt;
+    return days * 86400 + hour * 3600 + minute * 60 + second;
+}
 inline bool base64url_id(std::string_view value, std::size_t min, std::size_t max) {
     if (value.size() < min || value.size() > max) return false;
     for (unsigned char c : value) {

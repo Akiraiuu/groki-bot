@@ -54,6 +54,42 @@ int main() {
     host_http_body = std::string(9000, 'x');
     assert(!fetch_agent_ticket(kSavedAgentTokenUrl, std::string(43, 'd')));
 
+    // A timezone or stale-RTC offset must not reject a fresh ticket from a
+    // certificate-verified broker. Keep the same expiry bounds against Date.
+    const auto server_now = saved_agent_http_date("Wed, 21 Oct 2026 00:49:51 GMT");
+    assert(server_now && *server_now == 1792543791);
+    assert(saved_agent_http_date("Tue, 01 Mar 2028 00:00:00 GMT") == std::nullopt); // wrong weekday
+    assert(saved_agent_http_date("Tue, 29 Feb 2028 00:00:00 GMT"));
+    for (const auto* bad : {"Wed, 29 Feb 2026 00:00:00 GMT", "Wed, 21 Oct 2026 24:00:00 GMT",
+                            "Wed, 21 Oct 2026 00:00:00 JST", "Wed, 21 Oct 2026 00:00:00 GMT extra", "garbage"}) {
+        assert(!saved_agent_http_date(bad));
+    }
+    for (const int skew : {-9 * 3600, 9 * 3600}) {
+        const std::time_t remote_now = std::time(nullptr) + skew;
+        char date[64]{};
+        assert(std::strftime(date, sizeof(date), "%a, %d %b %Y %H:%M:%S GMT", std::gmtime(&remote_now)) == 29);
+        host_http_headers = {{"Date", date}};
+        host_http_body = ticket_json("agent_test_only", remote_now + 300);
+        assert(!parse_agent_ticket(host_http_body.data(), host_http_body.size(), std::time(nullptr)));
+        assert(fetch_agent_ticket(kSavedAgentTokenUrl, std::string(43, 'd')));
+        host_http_status = 302;
+        assert(!fetch_agent_ticket(kSavedAgentTokenUrl, std::string(43, 'd')));
+        host_http_status = 200;
+    }
+    host_http_headers = {{"dAtE", "Wed, 21 Oct 2026 00:49:51 GMT"}};
+    host_http_body = ticket_json("agent_test_only", *server_now + 300);
+    assert(fetch_agent_ticket(kSavedAgentTokenUrl, std::string(43, 'd')));
+    host_http_body = ticket_json("agent_test_only", *server_now - 1);
+    assert(!fetch_agent_ticket(kSavedAgentTokenUrl, std::string(43, 'd')));
+    host_http_body = ticket_json("agent_test_only", *server_now + 3600);
+    assert(!fetch_agent_ticket(kSavedAgentTokenUrl, std::string(43, 'd')));
+    host_http_body = ticket_json("agent_test_only", *server_now + 300);
+    host_http_headers.push_back({"Date", "Wed, 21 Oct 2026 00:49:51 GMT"});
+    assert(!fetch_agent_ticket(kSavedAgentTokenUrl, std::string(43, 'd')));
+    host_http_headers = {{"Date", "invalid"}};
+    assert(!fetch_agent_ticket(kSavedAgentTokenUrl, std::string(43, 'd')));
+    host_http_headers.clear();
+
     OpenAiRealtimeClient client("fake-ephemeral-token", RealtimeBackend::Xai);
     std::vector<ConversationEvent> events;
     client.set_event_callback([&](const auto& e) {events.push_back(e);});

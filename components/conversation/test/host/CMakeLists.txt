@@ -93,3 +93,9 @@ target_include_directories(conversation_test_paid_voice_test PRIVATE
 target_link_libraries(conversation_test_paid_voice_test PRIVATE cjson_host Threads::Threads)
 target_compile_options(conversation_test_paid_voice_test PRIVATE -Wall -Wextra)
 add_test(NAME paid_voice_test COMMAND conversation_test_paid_voice_test)
+
+add_executable(conversation_test_wake_confirmation test_wake_confirmation.cpp)
+target_include_directories(conversation_test_wake_confirmation PRIVATE ${CONVERSATION_ROOT}/include)
+target_link_libraries(conversation_test_wake_confirmation PRIVATE Threads::Threads)
+target_compile_options(conversation_test_wake_confirmation PRIVATE -Wall -Wextra)
+add_test(NAME wake_confirmation COMMAND conversation_test_wake_confirmation)

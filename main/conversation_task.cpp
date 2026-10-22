@@ -33,6 +33,8 @@
 #include "conversation/saved_agent.hpp"
 #include "conversation/paid_voice_test.hpp"
 #include "conversation/single_turn_input.hpp"
+#include "conversation/wake_confirmation.hpp"
+#include "local_wake.hpp"
 #include "conversation/xiaozhi_client.hpp"
 #include "led_runtime.hpp"
 #include "utf8.hpp"
@@ -449,19 +451,72 @@ private:
     {
         using Test = conv::PaidVoiceTest;
         conv::paid_voice_test.set_available(true, esp_random());
+#if defined(CONFIG_STACKCHAN_JINGTONG_WAKE)
+        state_.local_wake.available.store(true);
+#endif
+        LocalWake wake;
+        std::int64_t next_wake_ms = 0;
         state_.conv.status.store(ConvStatus::Disabled, std::memory_order_relaxed);
         state_.set_balloon_text("语音未连接，请先确认测试费用", 5000);
         for (;;) {
+            const auto now = esp_timer_get_time() / 1000;
+            const auto pending = conv::paid_voice_test.snapshot(now);
+            const bool idle = pending.phase == Test::Phase::Idle;
+            const bool enabled = state_.local_wake.enabled.load();
+            if (!enabled || !idle || state_.audio_stream_active.load() || M5.Speaker.isPlaying()) {
+                wake.close();
+                conv::wake_confirmation.cancel();
+                if (enabled) state_.local_wake.status.store(SharedState::LocalWakeState::Paused);
+                else if (state_.local_wake.status.load() != SharedState::LocalWakeState::Unavailable)
+                    state_.local_wake.status.store(SharedState::LocalWakeState::Off);
+            } else if (conv::wake_confirmation.snapshot(now).id) {
+                wake.close();
+                state_.local_wake.status.store(SharedState::LocalWakeState::Confirming);
+                next_wake_ms = now + 2000;
+            } else if (state_.local_wake.status.load() == SharedState::LocalWakeState::Confirming) {
+                // Expiry/cancel finishes this local attempt too. Do not silently
+                // resume capture after an unanswered cost dialog.
+                wake.close();
+                state_.local_wake.enabled.store(false);
+                state_.local_wake.status.store(SharedState::LocalWakeState::Off);
+            } else if (now >= next_wake_ms) {
+                const auto result = wake.poll();
+                if (result == LocalWake::Result::Failed) {
+                    wake.close();
+                    state_.local_wake.enabled.store(false);
+                    state_.local_wake.status.store(SharedState::LocalWakeState::Unavailable);
+                    state_.set_balloon_text("离线识别不可用，仍可手动开启语音", 5000);
+                } else if (result == LocalWake::Result::Detected) {
+                    // Release mic AND decoder before presenting a confirmation.
+                    wake.close();
+                    if (state_.local_wake.enabled.load() &&
+                        !state_.audio_stream_active.load() && !M5.Speaker.isPlaying())
+                        conv::wake_confirmation.offer(esp_timer_get_time() / 1000, conv::paid_voice_test);
+                    state_.local_wake.status.store(SharedState::LocalWakeState::Confirming);
+                    next_wake_ms = esp_timer_get_time() / 1000 + 2000;
+                } else {
+                    state_.local_wake.status.store(SharedState::LocalWakeState::Listening);
+                }
+            }
             if (conv::paid_voice_test.claim(esp_timer_get_time() / 1000, Test::Mode::Local)) {
+                state_.local_wake.enabled.store(false);
+                wake.close();
+                conv::wake_confirmation.cancel();
                 run_local_record_playback();
                 continue;
             }
             if (!conv::paid_voice_test.claim(esp_timer_get_time() / 1000)) {
                 if (conv::paid_voice_test.snapshot(esp_timer_get_time() / 1000).phase == Test::Phase::Stopping)
                     conv::paid_voice_test.finish();
-                vTaskDelay(pdMS_TO_TICKS(50));
+                vTaskDelay(pdMS_TO_TICKS(state_.local_wake.enabled.load() ? 1 : 50));
                 continue;
             }
+            // Even a start arriving during model initialization must release all
+            // local resources first. Its original 60s deadline is never extended.
+            state_.local_wake.enabled.store(false);
+            state_.local_wake.status.store(SharedState::LocalWakeState::Off);
+            wake.close();
+            conv::wake_confirmation.cancel();
             paid_input_.reset();
             state_.set_balloon_text("付费语音测试：1轮，最多60秒", 5000);
             // Wi-Fi wait consumes the same budget. No token is requested yet.
@@ -1029,6 +1084,8 @@ private:
         M5.Mic.record(mic_buf_[1].data(), mic_buf_[1].size(), mic_sample_rate_, /*stereo=*/false);
         mic_read_ = 0;
         set_local(Local::Listening);
+        if (provider_ == config::Provider::Grok)
+            state_.set_balloon_text("收音已就绪，请说一句产品问题", 10000);
     }
 
     // Switch the I2S bus to the speaker and begin streaming playback. Called

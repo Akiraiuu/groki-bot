@@ -21,6 +21,7 @@
 
 #include "servo_limits.hpp"
 #include "wifi_sta.hpp"
+#include "conversation/wake_confirmation.hpp"
 
 namespace stackchan::app::ui {
 
@@ -67,6 +68,7 @@ std::atomic<bool> g_active{false};
 std::atomic<int> g_page{kInfo};
 std::atomic<int> g_tab_page{0}; // which group of tabs is visible (paging)
 std::atomic<bool> g_dirty{true};
+std::atomic<std::uint32_t> g_drawn_wake_id{0};
 int g_provider = 0; // 0 = OpenAI, 1 = Gemini, 2 = XiaoZhi, 3 = Grok (cached at init)
 
 // Staged settings (loaded from NVS on open; applied on 適用).
@@ -645,6 +647,45 @@ void draw_conversation()
     draw_kv(y, "服务", provider_name, fg); y += dy;
     draw_kv(y, "状态", status_text, status_color); y += dy;
     draw_kv(y, "重连", rc, reconnects > 0 ? warn : fg); y += dy;
+    if (g_provider == 3 && g_state->local_wake.available.load()) {
+        const auto st = g_state->local_wake.status.load();
+        const char* text = st == SharedState::LocalWakeState::Listening ? "本地待命，不上传"
+                         : st == SharedState::LocalWakeState::Unavailable ? "模型不可用"
+                         : st == SharedState::LocalWakeState::Confirming ? "等待费用确认"
+                         : st == SharedState::LocalWakeState::Paused ? "已暂停"
+                         : g_state->local_wake.enabled.load() ? "正在准备" : "已关闭";
+        draw_kv(y, "离线唤醒", text, warn);
+        g_cv->fillRoundRect(12, 158, 296, 32, 5, g_cv->color565(45, 80, 110));
+        g_cv->fillRoundRect(12, 196, 296, 32, 5, g_cv->color565(120, 55, 50));
+        g_cv->setTextDatum(lgfx::textdatum_t::middle_center);
+        g_cv->setTextColor(fg);
+        g_cv->drawString(g_state->local_wake.enabled.load() ? "关闭本地唤醒" : "开启本地唤醒（不上传）", 160, 174);
+        g_cv->drawString("停止语音与唤醒", 160, 212);
+    }
+}
+
+void draw_wake_confirmation(const conversation::WakeConfirmation::Snapshot& prompt)
+{
+    g_cv->fillScreen(g_cv->color565(20, 22, 28));
+    g_cv->setFont(kFontBody);
+    g_cv->setTextSize(1);
+    g_cv->setTextDatum(lgfx::textdatum_t::middle_center);
+    g_cv->setTextColor(g_cv->color565(245, 245, 245));
+    g_cv->drawString("精通AI助手", 160, 18);
+    g_cv->drawString("已听到：你好，精通", 160, 46);
+    g_cv->drawString("本次现场一句产品问题", 160, 72);
+    g_cv->drawString("连接 xAI 会产生费用", 160, 96);
+    g_cv->drawString("1轮，最多60秒，结束即断开", 160, 120);
+    g_cv->drawString("Agent 自动工具可能另计费", 160, 144);
+    char text[48];
+    std::snprintf(text, sizeof(text), "%ld秒未确认即取消", static_cast<long>((prompt.remaining_ms + 999) / 1000));
+    g_cv->drawString(text, 160, 170);
+    g_cv->fillRoundRect(12, 194, 142, 38, 5, g_cv->color565(85, 85, 95));
+    g_cv->fillRoundRect(166, 194, 142, 38, 5, g_cv->color565(45, 120, 75));
+    g_cv->drawString("取消", 83, 213);
+    g_cv->drawString("同意本次费用", 237, 213);
+    // A tap arriving before this dialog was actually drawn cannot approve it.
+    g_drawn_wake_id.store(prompt.id);
 }
 
 // --- LT (lightning talk) timekeeper page ----------------------------------
@@ -839,11 +880,19 @@ void init(SharedState& state)
 
 bool active()
 {
-    return g_active.load(std::memory_order_relaxed);
+    return g_active.load(std::memory_order_relaxed) ||
+           conversation::wake_confirmation.snapshot(esp_timer_get_time() / 1000).id != 0;
 }
 
 void toggle()
 {
+    if (conversation::wake_confirmation.snapshot(esp_timer_get_time() / 1000).id) {
+        g_state->local_wake.enabled.store(false);
+        conversation::wake_confirmation.cancel();
+        g_drawn_wake_id.store(0);
+        g_dirty.store(true);
+        return;
+    }
     if (g_active.load(std::memory_order_relaxed)) {
         // Closing — mirror the close branch of handle_tap's top-bar close
         // hit: drop range mode so the servo task re-engages torque, then
@@ -870,6 +919,23 @@ bool handle_tap(int x, int y)
     // the 320×240 box and harmlessly fail all in_rect() checks.
     x -= g_off_x;
     y -= g_off_y;
+    const auto prompt = conversation::wake_confirmation.snapshot(esp_timer_get_time() / 1000);
+    if (prompt.id) {
+        if (in_rect(x, y, 12, 194, 142, 38)) {
+            g_state->local_wake.enabled.store(false);
+            conversation::wake_confirmation.cancel();
+        } else if (in_rect(x, y, 166, 194, 142, 38) && g_state->local_wake.enabled.load()) {
+            if (conversation::wake_confirmation.confirm(esp_timer_get_time() / 1000,
+                    g_drawn_wake_id.load(), conversation::paid_voice_test)) {
+                g_state->local_wake.enabled.store(false);
+                g_active.store(false);
+                g_state->set_balloon_text("正在连接，请等收音就绪后再说话", 10000);
+            }
+        }
+        g_dirty.store(true);
+        return true; // never pass through an unpainted/stale dialog to the avatar
+    }
+    if (g_drawn_wake_id.exchange(0)) { g_dirty.store(true); return true; }
     if (!g_active.load(std::memory_order_relaxed)) {
         // Avatar showing: a tap in the top-right corner opens the UI.
         if (x >= kW - 64 && y < 64) {
@@ -1063,6 +1129,22 @@ bool handle_tap(int x, int y)
             save_range_and_reboot(); // does not return
         }
         if (changed) g_dirty.store(true, std::memory_order_relaxed);
+    } else if (page == kConversation && g_provider == 3 && g_state->local_wake.available.load()) {
+        if (in_rect(x, y, 12, 158, 296, 32)) {
+            const auto paid = conversation::paid_voice_test.snapshot(esp_timer_get_time() / 1000);
+            if (paid.phase == conversation::PaidVoiceTest::Phase::Idle) {
+                const bool on = !g_state->local_wake.enabled.load();
+                g_state->local_wake.enabled.store(on);
+                g_state->local_wake.status.store(on ? SharedState::LocalWakeState::Loading : SharedState::LocalWakeState::Off);
+                if (!on) conversation::wake_confirmation.cancel();
+                g_state->set_balloon_text(on ? "仅本地收音，请说：你好，精通" : "本地唤醒已关闭", 5000);
+            }
+        } else if (in_rect(x, y, 12, 196, 296, 32)) {
+            g_state->local_wake.enabled.store(false);
+            conversation::wake_confirmation.cancel();
+            conversation::paid_voice_test.request_stop();
+        }
+        g_dirty.store(true);
     } else if (page == kLtTimer) {
         const bool active = g_state->lt.active.load(std::memory_order_relaxed);
         const int gap = 6;
@@ -1094,6 +1176,7 @@ bool handle_tap(int x, int y)
 // so a curved drag-style tap doesn't accidentally switch tabs.
 void handle_flick(int dx, int dy)
 {
+    if (conversation::wake_confirmation.snapshot(esp_timer_get_time() / 1000).id) return;
     if (!g_active.load(std::memory_order_relaxed)) return;
     // Range mode is a hand-driven page (user is moving the head manually);
     // a horizontal flick is almost certainly trying to capture a position
@@ -1137,6 +1220,13 @@ bool draw(avatar::RichCanvas& canvas)
     OffsetRichCanvas wrapped(canvas, g_off_x, g_off_y, kW, kH);
     g_cv = (g_off_x == 0 && g_off_y == 0) ? &canvas
                                           : static_cast<avatar::RichCanvas*>(&wrapped);
+
+    const auto prompt = conversation::wake_confirmation.snapshot(esp_timer_get_time() / 1000);
+    if (prompt.id) {
+        draw_wake_confirmation(prompt);
+        return true;
+    }
+    if (g_drawn_wake_id.exchange(0)) g_dirty.store(true);
 
     bool need = g_dirty.exchange(false, std::memory_order_relaxed);
     // The info and 会話 pages have live fields (IP/uptime/heap, conn status /

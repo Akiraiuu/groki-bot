@@ -49,6 +49,7 @@ jobs:
           . "$IDF_PATH/export.sh"
           make set-target BOARD=stopwatch
           make build BOARD=stopwatch
+          python3 script/verify_wake_model.py build-stopwatch
           python3 script/pack_firmware.py --build-dir build-stopwatch --out build-stopwatch/firmware-stopwatch-grok.bin
       - name: Upload development firmware
         uses: actions/upload-artifact@v4
@@ -64,3 +65,5 @@ jobs:
             build-stopwatch/ota_data_initial.bin
             build-stopwatch/flash_args
             build-stopwatch/flasher_args.json
+            build-stopwatch/srmodels/srmodels.bin
+            build-stopwatch/wake-model-validation.json

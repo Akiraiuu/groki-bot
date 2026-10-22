@@ -73,6 +73,15 @@ class SharedState {
 public:
     using BalloonCompletionCallback = std::function<void()>;
 
+    // RAM-only opt-in. Every reboot and completed paid interaction disables it.
+    // PCM stays on-device; recognition never authorizes the network transport.
+    struct LocalWakeState {
+        enum Status { Off, Loading, Listening, Confirming, Unavailable, Paused };
+        std::atomic<bool> available{false};
+        std::atomic<bool> enabled{false};
+        std::atomic<int> status{Off};
+    } local_wake;
+
     // --- Avatar face (render_task reads every frame) -----------------------
     struct Face {
         std::atomic<float> mouth_open{0.0f};

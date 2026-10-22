@@ -39,6 +39,9 @@ struct DrawContext {
     // saccade_tick; kept zero when saccade is disabled.
     float gaze_saccade_h{0.0f};
     float gaze_saccade_v{0.0f};
+    // Suppress commanded/random gaze and recenter the built-in eye rings.
+    // Expression shape, blinking, breath and mouth animation remain active.
+    bool fixed_gaze_enabled{false};
     float eye_open_ratio{1.0f};
     float mouth_open_ratio{0.0f};
     Palette palette{kDefaultPalette};

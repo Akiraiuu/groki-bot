@@ -454,6 +454,15 @@
 
   <!-- ===== アバター ===== -->
   <section class="tab-panel" data-tab="avatar">
+    <div id="fixed-gaze-section">
+      <h2 class="section-title">视线设置</h2>
+      <label class="toggle-label" for="fixed-gaze-enabled">
+        <input type="checkbox" id="fixed-gaze-enabled" checked disabled>
+        固定正视
+      </label>
+      <p class="hint">开启后眼睛保持居中，不跟随触摸、倾斜或左右扫视；保留眨眼、表情和嘴部动画。关闭后恢复自然视线。即时生效并保存，无需重启，不会开启语音或调用 API。</p>
+      <p id="fixed-gaze-status" class="hint" role="status">正在读取设置…</p>
+    </div>
     <div id="avatar-dsl-section">
       <h2 class="section-title">顔描画 DSL (Avatar)</h2>
       <p class="hint" style="margin-bottom:0.5rem">
@@ -1553,6 +1562,9 @@ async function refresh() {
       $('audio-output').value = String(s.audio_output);
     }
     $('barge-in-enabled').checked = !!s.barge_in_enabled; // default false if absent
+    $('fixed-gaze-enabled').checked = (s.fixed_gaze_enabled !== false);
+    $('fixed-gaze-enabled').disabled = false;
+    $('fixed-gaze-status').textContent = s.fixed_gaze_enabled !== false ? '固定正视已开启' : '自然视线已开启';
     $('rtp-enabled').checked = (s.rtp_audio_enabled !== false); // default on if absent
     $('jtts-idle-enabled').checked = (s.jtts_idle_enabled !== false); // default on if absent
     $('led-mouth-sync').checked = !!s.led_mouth_sync_enabled; // default off if absent
@@ -2130,6 +2142,21 @@ $('ota-release-select').addEventListener('change', (e) => {
   if (e.target.value) $('ota-release-tag').value = e.target.value;
 });
 
+$('fixed-gaze-enabled').addEventListener('change', async (event) => {
+  const control = event.target;
+  const enabled = control.checked;
+  control.disabled = true;
+  try {
+    await postText('/api/fixed-gaze', enabled ? '1' : '0');
+    $('fixed-gaze-status').textContent = enabled ? '固定正视已开启并保存' : '自然视线已开启并保存';
+  } catch (error) {
+    control.checked = !enabled;
+    $('fixed-gaze-status').textContent = '保存失败，请刷新页面确认：' + error.message;
+  } finally {
+    control.disabled = false;
+  }
+});
+
 refresh();
 
 // 設定ごとの「再起動が必要 / 即時反映」バッジを /api/reboot-required から
@@ -2137,6 +2164,7 @@ refresh();
 // 手書きヒントのように陳腐化しない。BADGE_FIELDS = registry id → 対象コントロールの
 // DOM id。checkbox は toggle-label ごと、input/select はコントロール直後に置く。
 const BADGE_FIELDS = {
+  'fixed-gaze':'fixed-gaze-enabled',
   'ssid':'ssid', 'password':'password', 'provider':'provider',
   'xai-token-url':'xai-token-url', 'xai-device-token':'xai-device-token',
   'operation-mode':'operation-mode', 'audio-output':'audio-output',

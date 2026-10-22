@@ -88,6 +88,9 @@ const std::array<SettingDescriptor, kSettingCount> kTable = {{
     bool_row("barge-in",          "bargein_en", ApplyKind::Immediate,
              [](const DeviceConfig& c) -> std::uint32_t { return c.barge_in_enabled ? 1 : 0; },
              [](DeviceConfig& c, std::uint32_t v) { c.barge_in_enabled = (v != 0); }),
+    bool_row("fixed-gaze",        "fixed_gaze", ApplyKind::Immediate,
+             [](const DeviceConfig& c) -> std::uint32_t { return c.fixed_gaze_enabled ? 1 : 0; },
+             [](DeviceConfig& c, std::uint32_t v) { c.fixed_gaze_enabled = (v != 0); }),
     // --- enums (u8 on the wire, bounds-checked, out-of-range keeps default) -
     num_row("provider",       "provider",   ValueType::U8, ApplyKind::Staged,
             static_cast<std::uint32_t>(Provider::Grok), false,

@@ -9,6 +9,7 @@
 #include <string>
 
 #include <esp_app_desc.h>
+#include <esp_log.h>
 #include <esp_mac.h>
 #include <esp_netif.h>
 #include <esp_system.h>
@@ -16,6 +17,7 @@
 
 #include <config_service/config_service.hpp>
 #include <config_service/config_store.hpp>
+#include <config_service/settings_registry.hpp>
 
 #include "servo_limits.hpp"
 #include "wifi_sta.hpp"
@@ -423,12 +425,12 @@ void draw_button(int i, const char* label, std::uint16_t color, int row_h = kRow
     g_cv->drawString(label, rx + rw / 2, ry + rh / 2);
 }
 
-// Settings is split across two tabs so the 6 toggles + apply button fit
+// Settings is split across two tabs so the toggles + apply button fit
 // under kH=240 with kSettingsRowH=30 each. Apply (= save+reboot) lives only
 // on 設定2 — staged values from both pages are merged in apply_and_reboot.
 //
 //   設定1 — 動作モード / 音声出力 / RTP / 電池ゲージ            (5 rows w/ caption)
-//   設定2 — サーボ恒久 / 起動アルペジオ / 適用                   (4 rows w/ caption)
+//   設定2 — servo / boot sound / fixed gaze (immediate) / apply + caption
 void draw_settings()
 {
     draw_value_row(0, "运行模式",
@@ -452,12 +454,14 @@ void draw_settings2()
                     kSettingsRowH);
     draw_toggle_row(1, "启动提示音", g_stage_boot_arp.load(std::memory_order_relaxed),
                     kSettingsRowH);
-    draw_button(2, "保存并重启", g_cv->color565(60, 120, 200), kSettingsRowH);
+    draw_toggle_row(2, "固定正视", g_state->face.fixed_gaze_enabled.load(std::memory_order_relaxed),
+                    kSettingsRowH);
+    draw_button(3, "保存并重启", g_cv->color565(60, 120, 200), kSettingsRowH);
     g_cv->setFont(kFontBody);
     g_cv->setTextDatum(lgfx::textdatum_t::top_left);
     g_cv->setTextColor(g_cv->color565(150, 150, 150));
-    g_cv->drawString("设置1+2 的修改会在保存后重启",
-                     12, kContentY + 3 * kSettingsRowH + 4);
+    g_cv->drawString("固定正视即时保存，其余保存重启",
+                     12, kContentY + 4 * kSettingsRowH + 4);
 }
 
 void draw_control()
@@ -970,6 +974,17 @@ bool handle_tap(int x, int y)
                                    std::memory_order_relaxed);
             g_dirty.store(true, std::memory_order_relaxed);
         } else if (hit_row(2)) {
+            // Save only this appearance key; never restart or start audio.
+            config::DeviceConfig cfg;
+            cfg.fixed_gaze_enabled = !g_state->face.fixed_gaze_enabled.load(std::memory_order_relaxed);
+            const auto* d = config::registry::find("fixed-gaze");
+            if (d != nullptr && config::store::save_one(*d, cfg)) {
+                config::notify_config_change(*d, cfg);
+                g_dirty.store(true, std::memory_order_relaxed);
+            } else {
+                ESP_LOGW("device_ui", "fixed-gaze: save failed; keeping current value");
+            }
+        } else if (hit_row(3)) {
             apply_and_reboot(); // does not return
         }
     } else if (page == kControl) {
@@ -1129,7 +1144,7 @@ bool draw(avatar::RichCanvas& canvas)
     // fields (present-position from the servo task) and wants a faster refresh
     // so the captured raw doesn't lag the user's hand.
     const int page = g_page.load(std::memory_order_relaxed);
-    if (page == kInfo || page == kConversation || page == kLtTimer) {
+    if (page == kInfo || page == kConversation || page == kLtTimer || page == kSettings2) {
         const std::uint32_t t = now_ms();
         if (t - g_last_info_ms > 500) {
             g_last_info_ms = t;

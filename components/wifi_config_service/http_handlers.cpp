@@ -373,7 +373,7 @@ esp_err_t handle_status_get(httpd_req_t* req)
     const bool wifi_ok = g_wifi_connected.load();
     const bool prov_mode = g_provisioning_mode.load();
     xSemaphoreTake(g_mutex, portMAX_DELAY);
-    const auto cfg = g_active;
+    auto cfg = g_active;
     const int bat_mv = g_battery_mv;
     const int bat_ma = g_battery_ma;
     const int bat_pct = g_battery_pct;
@@ -383,6 +383,8 @@ esp_err_t handle_status_get(httpd_req_t* req)
     const bool has_mcp = !g_mcp_active_token.empty();  // ロック下でスナップショット
     xSemaphoreGive(g_mutex);
 
+    // The physical menu can change this immediate setting independently.
+    cfg.fixed_gaze_enabled = config::load().fixed_gaze_enabled;
     config::ServoPositionsView pos{-1, -1};
     if (pos_getter != nullptr) pos = pos_getter();
 
@@ -411,6 +413,7 @@ esp_err_t handle_status_get(httpd_req_t* req)
     body += "\"rtp_audio_enabled\":" + std::string(cfg.rtp_audio_enabled ? "true" : "false") + ",";
     body += "\"jtts_idle_enabled\":" + std::string(cfg.jtts_idle_enabled ? "true" : "false") + ",";
     body += "\"battery_gauge_enabled\":" + std::string(cfg.battery_gauge_enabled ? "true" : "false") + ",";
+    body += "\"fixed_gaze_enabled\":" + std::string(cfg.fixed_gaze_enabled ? "true" : "false") + ",";
     body += "\"startup_arpeggio_enabled\":" + std::string(cfg.startup_arpeggio_enabled ? "true" : "false") + ",";
     body += "\"servo_enabled\":" + std::string(cfg.servo_enabled ? "true" : "false") + ",";
     body += "\"led_mouth_sync_enabled\":" + std::string(cfg.led_mouth_sync_enabled ? "true" : "false") + ",";
@@ -665,6 +668,27 @@ esp_err_t handle_barge_in_enabled_post(httpd_req_t* req)
     return send_empty(req);
 }
 
+esp_err_t handle_fixed_gaze_post(httpd_req_t* req)
+{
+    if (!require_auth(req)) return ESP_OK;
+    std::string body;
+    if (read_body_str(req, body, 8) != ESP_OK) return ESP_OK;
+    if (body != "0" && body != "1") {
+        return send_error(req, "400 Bad Request", "expected 0 or 1");
+    }
+    const auto* d = config::registry::find("fixed-gaze");
+    config::DeviceConfig cfg;
+    cfg.fixed_gaze_enabled = (body == "1");
+    if (d == nullptr || !config::store::save_one(*d, cfg)) {
+        return send_error(req, "500 Internal Server Error", "fixed-gaze save failed");
+    }
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    g_active.fixed_gaze_enabled = cfg.fixed_gaze_enabled;
+    xSemaphoreGive(g_mutex);
+    config::notify_config_change(*d, cfg);
+    return send_empty(req);
+}
+
 esp_err_t handle_battery_gauge_post(httpd_req_t* req)
 {
     if (!require_auth(req)) return ESP_OK;
@@ -842,8 +866,9 @@ esp_err_t handle_settings_get(httpd_req_t* req)
 {
     if (!require_auth(req)) return ESP_OK;
     xSemaphoreTake(g_mutex, portMAX_DELAY);
-    const auto cfg = g_active;
+    auto cfg = g_active;
     xSemaphoreGive(g_mutex);
+    cfg.fixed_gaze_enabled = config::load().fixed_gaze_enabled;
 
     using config::registry::ApplyKind;
     using config::registry::ValueType;
@@ -1916,6 +1941,7 @@ void register_handlers(httpd_handle_t server, const config::DeviceConfig& curren
     add(server, "/api/lip-sync-mode",   HTTP_POST, handle_lip_sync_mode_post);
     add(server, "/api/mic-lip-agc",     HTTP_POST, handle_mic_lip_agc_post);
     add(server, "/api/barge-in",        HTTP_POST, handle_barge_in_enabled_post);
+    add(server, "/api/fixed-gaze",      HTTP_POST, handle_fixed_gaze_post);
     add(server, "/api/battery-gauge",   HTTP_POST, handle_battery_gauge_post);
     add(server, "/api/startup-arpeggio",HTTP_POST, handle_startup_arpeggio_post);
     add(server, "/api/servo-enabled",   HTTP_POST, handle_servo_enabled_post);

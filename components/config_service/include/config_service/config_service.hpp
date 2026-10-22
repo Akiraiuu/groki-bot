@@ -161,6 +161,9 @@ struct DeviceConfig {
     // Empty → built-in default face. Applied live over BLE and restored at boot.
     // See main/face_config.hpp for the schema.
     std::string face_config_json;
+    // Keep the eyes facing forward. Live-applied and persisted independently;
+    // defaults on for this StopWatch firmware, including existing NVS installs.
+    bool fixed_gaze_enabled = true;
     // Show the battery gauge in the top-left of the avatar screen. Defaults to
     // true for backwards compatibility with NVS contents that pre-date the flag.
     // Takes effect after the Apply reboot.

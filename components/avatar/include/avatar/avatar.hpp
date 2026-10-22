@@ -37,6 +37,7 @@ public:
     Expression resolve_expression(std::uint32_t now_ms) noexcept;
     void set_mouth_open(float ratio) noexcept;
     void set_gaze(float horizontal, float vertical) noexcept;
+    void set_fixed_gaze(bool enabled) noexcept;
     void set_palette(const Palette& palette) noexcept;
     // Rebuild the face layout from user tuning (eye/eyebrow/mouth geometry) and
     // apply its face/background colours. Takes effect on the next tick(); safe

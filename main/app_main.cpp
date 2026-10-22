@@ -603,6 +603,7 @@ extern "C" void app_main()
                                  std::memory_order_relaxed);
     g_state->mic_lip.agc_enabled.store(cfg.mic_lip_agc_enabled,
                                        std::memory_order_relaxed);
+    g_state->face.fixed_gaze_enabled.store(cfg.fixed_gaze_enabled, std::memory_order_relaxed);
     g_state->barge_in_enabled.store(cfg.barge_in_enabled,
                                     std::memory_order_relaxed);
     stackchan::app::settings_sinks::register_ble_sinks(

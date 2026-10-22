@@ -100,6 +100,8 @@ public:
         // 0 = no commanded gaze, animator runs alone.
         std::atomic<float> gaze_target_h{0.0f};
         std::atomic<float> gaze_target_v{0.0f};
+        // Local appearance preference. Never starts microphone or conversation.
+        std::atomic<bool> fixed_gaze_enabled{true};
     };
     Face face;
 

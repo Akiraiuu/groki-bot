@@ -462,6 +462,11 @@ private:
             const auto now = esp_timer_get_time() / 1000;
             const auto pending = conv::paid_voice_test.snapshot(now);
             const bool idle = pending.phase == Test::Phase::Idle;
+            // Web/USB stop rotates the paid nonce even while idle. It must also
+            // revoke local listening, not merely a not-yet-started cloud call.
+            if (state_.local_wake.enabled.load() &&
+                pending.approval_id != state_.local_wake.approval_id.load())
+                state_.local_wake.enabled.store(false);
             const bool enabled = state_.local_wake.enabled.load();
             if (!enabled || !idle || state_.audio_stream_active.load() || M5.Speaker.isPlaying()) {
                 wake.close();

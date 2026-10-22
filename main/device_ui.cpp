@@ -1134,6 +1134,7 @@ bool handle_tap(int x, int y)
             const auto paid = conversation::paid_voice_test.snapshot(esp_timer_get_time() / 1000);
             if (paid.phase == conversation::PaidVoiceTest::Phase::Idle) {
                 const bool on = !g_state->local_wake.enabled.load();
+                if (on) g_state->local_wake.approval_id.store(paid.approval_id);
                 g_state->local_wake.enabled.store(on);
                 g_state->local_wake.status.store(on ? SharedState::LocalWakeState::Loading : SharedState::LocalWakeState::Off);
                 if (!on) conversation::wake_confirmation.cancel();

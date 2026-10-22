@@ -79,6 +79,7 @@ public:
         enum Status { Off, Loading, Listening, Confirming, Unavailable, Paused };
         std::atomic<bool> available{false};
         std::atomic<bool> enabled{false};
+        std::atomic<std::uint32_t> approval_id{0}; // captured on the enabling tap
         std::atomic<int> status{Off};
     } local_wake;
 

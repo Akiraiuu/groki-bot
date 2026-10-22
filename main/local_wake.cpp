@@ -28,11 +28,15 @@ struct LocalWake::Impl {
     bool commands{false}, mic{false}, recording{false};
     std::int64_t warm_until{0}, record_until{0};
     ~Impl() {
-        if (mic) { M5.Mic.end(); vTaskDelay(pdMS_TO_TICKS(20)); }
+        if (mic) {
+            M5.Mic.end();
+            vTaskDelay(pdMS_TO_TICKS(20));
+        }
         if (pcm) { std::fill_n(pcm, 2 * samples, 0); heap_caps_free(pcm); }
         if (commands) esp_mn_commands_free();
         if (decoder && api) api->destroy(decoder);
         if (models) esp_srmodel_deinit(models);
+        if (mic) ESP_LOGI("local-wake", "local capture stopped; PCM erased; decoder released");
     }
     bool begin() {
         models = esp_srmodel_init("model");

@@ -25,7 +25,7 @@ struct LocalWake::Impl {
     model_iface_data_t* decoder{nullptr};
     std::int16_t* pcm{nullptr};
     int samples{0}, slot{0};
-    bool commands{false}, mic{false}, recording{false};
+    bool commands{false}, mic{false}, recording{false}, ready{false};
     std::int64_t warm_until{0}, record_until{0};
     ~Impl() {
         if (mic) {
@@ -69,7 +69,7 @@ struct LocalWake::Impl {
         M5.Mic.config(cfg);
         mic = M5.Mic.begin();
         warm_until = esp_timer_get_time() / 1000 + 1500;
-        if (mic) ESP_LOGI("local-wake", "offline command detector ready; no token/socket/upload");
+        if (mic) ESP_LOGI("local-wake", "local microphone warming up; no token/socket/upload");
         return mic;
     }
     LocalWake::Result poll() {
@@ -78,17 +78,26 @@ struct LocalWake::Impl {
             if (!M5.Mic.record(pcm, samples, 16000, false)) return LocalWake::Result::Failed;
             recording = true;
             record_until = now + 1000;
-            return LocalWake::Result::Waiting;
+            return LocalWake::Result::Preparing;
         }
         if (M5.Mic.isRecording())
-            return now >= record_until ? LocalWake::Result::Failed : LocalWake::Result::Waiting;
+            return now >= record_until ? LocalWake::Result::Failed
+                 : ready ? LocalWake::Result::Waiting : LocalWake::Result::Preparing;
         auto* completed = pcm + slot * samples;
         // Queue the next buffer BEFORE inference so CPU work does not leave
         // holes in the microphone stream. The driver never owns completed.
         slot = 1 - slot;
         if (!M5.Mic.record(pcm + slot * samples, samples, 16000, false)) return LocalWake::Result::Failed;
         record_until = now + 1000;
-        if (now < warm_until) { api->clean(decoder); return LocalWake::Result::Waiting; }
+        if (now < warm_until) { api->clean(decoder); return LocalWake::Result::Preparing; }
+        if (!ready) {
+            // Discard the buffer spanning the warm-up boundary too. The next
+            // buffer starts before the ready cue and contains its full onset.
+            api->clean(decoder);
+            ready = true;
+            ESP_LOGI("local-wake", "offline detector ready; no token/socket/upload");
+            return LocalWake::Result::Waiting;
+        }
         const auto state = api->detect(decoder, completed);
         if (state == ESP_MN_STATE_DETECTED) {
             const auto* r = api->get_results(decoder);

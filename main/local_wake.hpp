@@ -7,7 +7,7 @@ namespace stackchan::app {
 // diagnostic audio. There is no second task competing for the I2S peripheral.
 class LocalWake {
 public:
-    enum class Result { Waiting, Detected, Failed };
+    enum class Result { Preparing, Waiting, Detected, Failed };
     LocalWake() = default;
     ~LocalWake();
     LocalWake(const LocalWake&) = delete;

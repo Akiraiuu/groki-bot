@@ -486,7 +486,9 @@ private:
                 state_.local_wake.status.store(SharedState::LocalWakeState::Off);
             } else if (now >= next_wake_ms) {
                 const auto result = wake.poll();
-                if (result == LocalWake::Result::Failed) {
+                if (result == LocalWake::Result::Preparing) {
+                    state_.local_wake.status.store(SharedState::LocalWakeState::Loading);
+                } else if (result == LocalWake::Result::Failed) {
                     wake.close();
                     state_.local_wake.enabled.store(false);
                     state_.local_wake.status.store(SharedState::LocalWakeState::Unavailable);
@@ -500,6 +502,8 @@ private:
                     state_.local_wake.status.store(SharedState::LocalWakeState::Confirming);
                     next_wake_ms = esp_timer_get_time() / 1000 + 2000;
                 } else {
+                    if (state_.local_wake.status.load() != SharedState::LocalWakeState::Listening)
+                        state_.set_balloon_text("本地收音已就绪：你好，精通", 5000);
                     state_.local_wake.status.store(SharedState::LocalWakeState::Listening);
                 }
             }

@@ -1138,7 +1138,7 @@ bool handle_tap(int x, int y)
                 g_state->local_wake.enabled.store(on);
                 g_state->local_wake.status.store(on ? SharedState::LocalWakeState::Loading : SharedState::LocalWakeState::Off);
                 if (!on) conversation::wake_confirmation.cancel();
-                g_state->set_balloon_text(on ? "仅本地收音，请说：你好，精通" : "本地唤醒已关闭", 5000);
+                g_state->set_balloon_text(on ? "正在准备本地识别，请稍候" : "本地唤醒已关闭", 5000);
             }
         } else if (in_rect(x, y, 12, 196, 296, 32)) {
             g_state->local_wake.enabled.store(false);

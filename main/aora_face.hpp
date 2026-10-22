@@ -7,8 +7,8 @@
 // see third_party/emotion-ball/.
 //
 // aora eye-ring compositor: using DrawContext's four expression weight sets, blends the eye-ring
-// contours in aora_ring_data.hpp point by point into this frame's 96 screen points (l0x,l0y..r47y,
-// 192 floats), which the avatar VM reads through the Var::RingBase range and draws.
+// contours in aora_ring_data.hpp point by point into 96 design points (l0x,l0y..r47y,
+// 192 floats). The VM maps Var::RingBase to the actual canvas before drawing.
 //
 // Each expression has its own ring pool and rotation rhythm: a ring change eases point by point over a
 // 340 ms smooth step (close to aora's spring interpolation); behaviour animations (sine/glance/jitter/scan)

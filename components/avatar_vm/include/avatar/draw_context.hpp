@@ -58,7 +58,10 @@ struct DrawContext {
     // (i.e. hold time elapsed for short text, or one marquee cycle for long
     // text). The render task polls this and notifies the application.
     bool balloon_done{false};
-    // aora eye-ring screen coordinates (non-owning pointer to the render task's frame buffer,
+    // aora eye-ring 320x240 design coordinates (non-owning frame-buffer pointer).
+    // The VM maps each x/y to the current canvas using the same scale/origin
+    // as DSL tx()/ty(), including the round-screen fit.
+    // Buffer layout:
     // kRingVarCount floats: l0x,l0y..l47y,r0x..r47y). With a null pointer
     // the Var::RingBase range reads 0.
     const float* aora_ring{nullptr};

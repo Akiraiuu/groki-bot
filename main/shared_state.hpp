@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "avatar/expression.hpp"
+#include "conversation/local_wake_status.hpp"
 
 namespace stackchan::app {
 
@@ -75,13 +76,8 @@ public:
 
     // RAM-only opt-in. Every reboot and completed paid interaction disables it.
     // PCM stays on-device; recognition never authorizes the network transport.
-    struct LocalWakeState {
-        enum Status { Off, Loading, Listening, Confirming, Unavailable, Paused };
-        std::atomic<bool> available{false};
-        std::atomic<bool> enabled{false};
-        std::atomic<std::uint32_t> approval_id{0}; // captured on the enabling tap
-        std::atomic<int> status{Off};
-    } local_wake;
+    using LocalWakeState = conversation::LocalWakeStatus;
+    LocalWakeState& local_wake{conversation::local_wake_status};
 
     // --- Avatar face (render_task reads every frame) -----------------------
     struct Face {

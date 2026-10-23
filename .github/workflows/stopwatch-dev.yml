@@ -67,3 +67,12 @@ jobs:
             build-stopwatch/flasher_args.json
             build-stopwatch/srmodels/srmodels.bin
             build-stopwatch/wake-model-validation.json
+      - name: Upload StopWatch debug symbols
+        uses: actions/upload-artifact@v4
+        with:
+          name: stopwatch-debug-${{ github.sha }}
+          retention-days: 7
+          if-no-files-found: error
+          path: |
+            build-stopwatch/stackchan_idf.elf
+            build-stopwatch/stackchan_idf.map

@@ -14,6 +14,8 @@
 #include <wifi_config_service/mcp_events.hpp>
 #include <conversation/paid_voice_test.hpp>
 #include <conversation/paid_voice_command.hpp>
+#include <conversation/local_wake_status.hpp>
+#include <conversation/wake_confirmation.hpp>
 
 #include <algorithm>
 #include <array>
@@ -1657,12 +1659,22 @@ esp_err_t handle_paid_voice_status(httpd_req_t* req)
     const auto s = conversation::paid_voice_test.snapshot(esp_timer_get_time() / 1000);
     constexpr const char* phases[] = {"idle", "queued", "running", "stopping"};
     constexpr const char* reasons[] = {"none", "completed", "cancelled", "timeout", "error", "interrupted"};
-    char body[384];
+    const auto& w = conversation::local_wake_status;
+    char body[1400];
     std::snprintf(body, sizeof(body),
-        "{\"phase\":\"%s\",\"reason\":\"%s\",\"available\":%s,\"remaining_ms\":%lld,\"max_rounds\":1,\"max_seconds\":60,\"approval_id\":%u,\"mode\":\"%s\",\"local_record_seconds\":5,\"local_max_seconds\":15}",
+        "{\"phase\":\"%s\",\"reason\":\"%s\",\"available\":%s,\"remaining_ms\":%lld,\"max_rounds\":1,\"max_seconds\":60,\"approval_id\":%u,\"mode\":\"%s\",\"local_record_seconds\":5,\"local_max_seconds\":15,"
+        "\"local_wake\":{\"enabled\":%s,\"check_only\":%s,\"state\":%d,\"stage\":%d,\"error\":%d,\"microphone_active\":%s,\"worker_active\":%s,\"remaining_ms\":%u,\"previous_stage\":%u,\"reset_reason\":%d,\"internal_free\":%u,\"psram_free\":%u,\"stack_free\":%u}}",
         phases[static_cast<int>(s.phase)], reasons[static_cast<int>(s.reason)], s.available ? "true" : "false",
         static_cast<long long>(s.remaining_ms), static_cast<unsigned>(s.approval_id),
-        s.mode == conversation::PaidVoiceTest::Mode::Local ? "local" : "paid");
+        s.mode == conversation::PaidVoiceTest::Mode::Local ? "local" : "paid",
+        w.enabled.load() ? "true" : "false", w.check_only.load() ? "true" : "false",
+        w.status.load(), static_cast<int>(w.stage.load()), static_cast<int>(w.error.load()),
+        w.microphone_active.load() ? "true" : "false", w.worker_active.load() ? "true" : "false",
+        static_cast<unsigned>(w.remaining(static_cast<std::uint32_t>(esp_timer_get_time() / 1000))),
+        static_cast<unsigned>(w.previous_stage.load()), static_cast<int>(esp_reset_reason()),
+        static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)),
+        static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM)),
+        static_cast<unsigned>(w.stack_free_bytes.load()));
     httpd_resp_set_hdr(req, "Cache-Control", "no-store");
     return send_json(req, std::string{body});
 }
@@ -1687,7 +1699,11 @@ esp_err_t handle_paid_voice_control(httpd_req_t* req)
     using Command = conversation::PaidVoiceCommand;
     if (command == Command::Invalid)
         return send_error(req, "400 Bad Request", "Explicit confirmation and exact test limits required");
-    if (command == Command::Stop) conversation::paid_voice_test.request_stop();
+    if (command == Command::Stop) {
+        conversation::local_wake_status.note_stop();
+        conversation::wake_confirmation.cancel();
+        conversation::paid_voice_test.request_stop();
+    }
     else if (!conversation::paid_voice_test.request_start(true, esp_timer_get_time() / 1000, approval_id,
         command == Command::LocalRecord ? conversation::PaidVoiceTest::Mode::Local : conversation::PaidVoiceTest::Mode::Paid))
         return send_error(req, "409 Conflict", "Test unavailable or already active; no new permission granted");

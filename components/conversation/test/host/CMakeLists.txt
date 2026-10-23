@@ -99,3 +99,11 @@ target_include_directories(conversation_test_wake_confirmation PRIVATE ${CONVERS
 target_link_libraries(conversation_test_wake_confirmation PRIVATE Threads::Threads)
 target_compile_options(conversation_test_wake_confirmation PRIVATE -Wall -Wextra)
 add_test(NAME wake_confirmation COMMAND conversation_test_wake_confirmation)
+
+add_executable(conversation_test_local_wake_worker
+    test_local_wake_worker.cpp ${CONVERSATION_ROOT}/../../main/local_wake.cpp)
+target_include_directories(conversation_test_local_wake_worker PRIVATE
+    wake_stubs ${CONVERSATION_ROOT}/include ${CONVERSATION_ROOT}/../../main)
+target_link_libraries(conversation_test_local_wake_worker PRIVATE Threads::Threads)
+target_compile_options(conversation_test_local_wake_worker PRIVATE -Wall -Wextra)
+add_test(NAME local_wake_worker COMMAND conversation_test_local_wake_worker)

@@ -15,4 +15,5 @@ dependencies:
   # [ASR Phase 0] esp-sr: on-device wake word (WakeNet) + AFE. Fetched
   # always but only used when CONFIG_STACKCHAN_ASR_ENABLED (models selected
   # via menuconfig → flashed to the `model` partition). cores3-asr variant.
-  espressif/esp-sr: "^2.4.0"
+  # Pin the version used by the verified MN5 model image and worker API.
+  espressif/esp-sr: "2.6.0"

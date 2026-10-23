@@ -651,16 +651,25 @@ void draw_conversation()
         const auto st = g_state->local_wake.status.load();
         const char* text = st == SharedState::LocalWakeState::Listening ? "本地待命，不上传"
                          : st == SharedState::LocalWakeState::Unavailable ? "模型不可用"
+                         : st == SharedState::LocalWakeState::Stopping ? "正在停止"
+                         : st == SharedState::LocalWakeState::Checked ? "自检通过，未收音"
                          : st == SharedState::LocalWakeState::Confirming ? "等待费用确认"
                          : st == SharedState::LocalWakeState::Paused ? "已暂停"
                          : g_state->local_wake.enabled.load() ? "正在准备" : "已关闭";
         draw_kv(y, "离线唤醒", text, warn);
-        g_cv->fillRoundRect(12, 158, 296, 32, 5, g_cv->color565(45, 80, 110));
-        g_cv->fillRoundRect(12, 196, 296, 32, 5, g_cv->color565(120, 55, 50));
+        g_cv->fillRoundRect(12, 149, 296, 26, 5, g_cv->color565(45, 80, 110));
+        g_cv->fillRoundRect(12, 179, 296, 26, 5, g_cv->color565(55, 75, 85));
+        g_cv->fillRoundRect(12, 209, 296, 26, 5, g_cv->color565(120, 55, 50));
         g_cv->setTextDatum(lgfx::textdatum_t::middle_center);
         g_cv->setTextColor(fg);
-        g_cv->drawString(g_state->local_wake.enabled.load() ? "关闭本地唤醒" : "开启本地唤醒（不上传）", 160, 174);
-        g_cv->drawString("停止语音与唤醒", 160, 212);
+        g_cv->drawString(g_state->local_wake.enabled.load() ? "关闭本地识别" : "开启唤醒（最多40秒）", 160, 162);
+        g_cv->drawString("模型自检（不收音）", 160, 192);
+        const bool noticed = g_state->local_wake.stop_notice.load();
+        const bool closed = !g_state->local_wake.worker_active.load() &&
+            !g_state->local_wake.microphone_active.load() &&
+            g_state->local_wake.stop_ack.load() == g_state->local_wake.stop_request.load() &&
+            conversation::paid_voice_test.snapshot(esp_timer_get_time() / 1000).phase == conversation::PaidVoiceTest::Phase::Idle;
+        g_cv->drawString(noticed ? (closed ? "已停止，语音未连接" : "正在停止，请稍候") : "停止语音与唤醒", 160, 222);
     }
 }
 
@@ -1130,18 +1139,26 @@ bool handle_tap(int x, int y)
         }
         if (changed) g_dirty.store(true, std::memory_order_relaxed);
     } else if (page == kConversation && g_provider == 3 && g_state->local_wake.available.load()) {
-        if (in_rect(x, y, 12, 158, 296, 32)) {
+        if (in_rect(x, y, 12, 149, 296, 26) || in_rect(x, y, 12, 179, 296, 26)) {
             const auto paid = conversation::paid_voice_test.snapshot(esp_timer_get_time() / 1000);
             if (paid.phase == conversation::PaidVoiceTest::Phase::Idle) {
-                const bool on = !g_state->local_wake.enabled.load();
-                if (on) g_state->local_wake.approval_id.store(paid.approval_id);
-                g_state->local_wake.enabled.store(on);
-                g_state->local_wake.status.store(on ? SharedState::LocalWakeState::Loading : SharedState::LocalWakeState::Off);
-                if (!on) conversation::wake_confirmation.cancel();
-                g_state->set_balloon_text(on ? "正在准备本地识别，请稍候" : "本地唤醒已关闭", 5000);
+                if (g_state->local_wake.enabled.load() || g_state->local_wake.worker_active.load()) {
+                    g_state->local_wake.note_stop();
+                    conversation::wake_confirmation.cancel();
+                    conversation::paid_voice_test.request_stop();
+                } else {
+                    const bool check = y >= 179;
+                    g_state->local_wake.check_only.store(check);
+                    g_state->local_wake.started_ms.store(static_cast<std::uint32_t>(esp_timer_get_time() / 1000));
+                    g_state->local_wake.approval_id.store(paid.approval_id);
+                    g_state->local_wake.stop_notice.store(false);
+                    g_state->local_wake.status.store(SharedState::LocalWakeState::Loading);
+                    g_state->local_wake.enabled.store(true);
+                    g_state->set_balloon_text(check ? "模型自检中，全程不收音" : "正在准备本地识别，请稍候", 5000);
+                }
             }
-        } else if (in_rect(x, y, 12, 196, 296, 32)) {
-            g_state->local_wake.enabled.store(false);
+        } else if (in_rect(x, y, 12, 209, 296, 26)) {
+            g_state->local_wake.note_stop();
             conversation::wake_confirmation.cancel();
             conversation::paid_voice_test.request_stop();
         }

@@ -36,7 +36,7 @@ void stage(Wake::Stage value) {
     progress_stage = n; progress_check = ~n; progress_magic = kMagic;
     diag.stage.store(value);
     diag.stack_free_bytes.store(uxTaskGetStackHighWaterMark(nullptr));
-    ESP_LOGI("local-wake", "stage=%u internal=%u psram=%u stack_free=%u", n,
+    ESP_LOGI("local-wake", "stage=%u internal=%u psram=%u stack_free=%u", static_cast<unsigned>(n),
         static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)),
         static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM)),
         static_cast<unsigned>(diag.stack_free_bytes.load()));

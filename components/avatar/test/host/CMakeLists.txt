@@ -34,6 +34,7 @@ target_include_directories(avatar_test_overlay_publish PRIVATE
     ${AVATAR_ROOT}/include
     ${VM_ROOT}/include
     ${REPO_ROOT}/main
+    ${REPO_ROOT}/components/conversation/include
 )
 target_link_libraries(avatar_test_overlay_publish PRIVATE pthread)
 target_compile_options(avatar_test_overlay_publish PRIVATE -Wall -Wextra)

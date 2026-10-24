@@ -31,6 +31,8 @@ struct IFont {};
 namespace fonts {
 inline lgfx::IFont lgfxJapanGothic_24;
 inline lgfx::IFont lgfxJapanGothic_16;
+inline lgfx::IFont efontCN_12;
+inline lgfx::IFont efontCN_16;
 } // namespace fonts
 
 class M5GFX; // forward decl

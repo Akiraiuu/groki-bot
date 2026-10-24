@@ -191,8 +191,20 @@ void Avatar::set_mouth_open(float ratio) noexcept {
 }
 
 void Avatar::set_gaze(float horizontal, float vertical) noexcept {
-    impl_->context().gaze_horizontal = horizontal;
-    impl_->context().gaze_vertical = vertical;
+    auto& ctx = impl_->context();
+    ctx.gaze_horizontal = ctx.fixed_gaze_enabled ? 0.0f : horizontal;
+    ctx.gaze_vertical = ctx.fixed_gaze_enabled ? 0.0f : vertical;
+}
+
+void Avatar::set_fixed_gaze(bool enabled) noexcept {
+    auto& ctx = impl_->context();
+    if (ctx.fixed_gaze_enabled != enabled) impl_->request_full_repaint();
+    ctx.fixed_gaze_enabled = enabled;
+    if (enabled) {
+        // Clear last frame's offsets before the ring compositor runs.
+        ctx.gaze_horizontal = ctx.gaze_vertical = 0.0f;
+        ctx.gaze_saccade_h = ctx.gaze_saccade_v = 0.0f;
+    }
 }
 
 void Avatar::set_palette(const Palette& palette) noexcept {
@@ -229,11 +241,7 @@ const DrawContext& Avatar::draw_context() const noexcept {
 }
 
 void Avatar::set_balloon_text(std::string_view text, std::uint32_t hold_ms) {
-    auto& ctx = impl_->context();
-    ctx.balloon_text = std::string{text};
-    ctx.balloon_hold_ms = hold_ms;
-    ctx.balloon_done = false;
-    ctx.balloon_set_ms = ctx.now_ms;
+    impl_->context().queue_balloon(text, hold_ms);
 }
 
 void Avatar::clear_balloon() noexcept {
@@ -242,6 +250,7 @@ void Avatar::clear_balloon() noexcept {
     impl_->request_full_repaint();
     ctx.balloon_hold_ms = 0;
     ctx.balloon_done = false;
+    ctx.balloon_start_pending = false;
 }
 
 bool Avatar::is_balloon_done() const noexcept {

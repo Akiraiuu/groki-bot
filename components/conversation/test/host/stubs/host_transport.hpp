@@ -12,6 +12,8 @@ using UBaseType_t = unsigned;
 using BaseType_t = int;
 using TaskHandle_t = void*;
 using esp_event_base_t = const char*;
+using esp_err_t = int;
+constexpr int ESP_FAIL = -1;
 constexpr int pdTRUE = 1, pdPASS = 1, ESP_OK = 0, eDeleted = 0;
 constexpr unsigned MALLOC_CAP_SPIRAM = 1, MALLOC_CAP_8BIT = 2;
 #define pdMS_TO_TICKS(ms) (ms)
@@ -19,13 +21,17 @@ constexpr unsigned MALLOC_CAP_SPIRAM = 1, MALLOC_CAP_8BIT = 2;
 #define ESP_LOGI(...) ((void)0)
 #define ESP_LOGW(...) ((void)0)
 #define ESP_LOGE(...) ((void)0)
-inline void* heap_caps_malloc(std::size_t n, unsigned) { return std::malloc(n); }
+inline std::size_t host_fail_heap_alloc_at_least = static_cast<std::size_t>(-1);
+inline void* heap_caps_malloc(std::size_t n, unsigned) {
+    return n >= host_fail_heap_alloc_at_least ? nullptr : std::malloc(n);
+}
 inline void heap_caps_free(void* p) { std::free(p); }
 inline std::int64_t esp_timer_get_time() { return 1000000; }
 inline int esp_crt_bundle_attach(void*) { return 0; }
 struct HostQueue { unsigned capacity; std::deque<void*> items; };
 using QueueHandle_t = HostQueue*;
-inline QueueHandle_t xQueueCreate(unsigned n, unsigned) { return new HostQueue{n, {}}; }
+inline QueueHandle_t host_last_queue{};
+inline QueueHandle_t xQueueCreate(unsigned n, unsigned) { host_last_queue = new HostQueue{n, {}}; return host_last_queue; }
 inline int xQueueSend(QueueHandle_t q, void* p, unsigned) {
     if (q->items.size() >= q->capacity) return 0;
     q->items.push_back(*static_cast<void**>(p)); return 1;
@@ -36,12 +42,23 @@ inline int xQueueReceive(QueueHandle_t q, void* p, unsigned) {
 }
 inline unsigned uxQueueMessagesWaiting(QueueHandle_t q) { return q->items.size(); }
 inline void vQueueDelete(QueueHandle_t q) { delete q; }
-inline int xTaskCreatePinnedToCoreWithCaps(void(*)(void*), const char*, unsigned,
-                                         void*, unsigned, TaskHandle_t* h, int, unsigned) {
+inline void (*host_pending_task)(void*){};
+inline void* host_pending_task_arg{};
+inline int xTaskCreatePinnedToCoreWithCaps(void(*fn)(void*), const char*, unsigned,
+                                         void* arg, unsigned, TaskHandle_t* h, int, unsigned) {
+    host_pending_task = fn; host_pending_task_arg = arg;
     *h = reinterpret_cast<void*>(1); return pdPASS;
 }
 inline int eTaskGetState(TaskHandle_t) { return eDeleted; }
-inline void vTaskDelay(unsigned) {}
+inline void vTaskDelay(unsigned) {
+    // Tests inspect the TX queue without a racing worker. At teardown the
+    // exit flag is set before the first delay, so run the worker's real exit
+    // path and acknowledgement before its queue/socket may be freed.
+    if (host_pending_task) {
+        auto fn = host_pending_task; host_pending_task = nullptr;
+        fn(host_pending_task_arg);
+    }
+}
 inline void vTaskDeleteWithCaps(void*) {}
 
 struct esp_websocket_client_config_t {

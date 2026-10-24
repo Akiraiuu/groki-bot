@@ -454,6 +454,15 @@
 
   <!-- ===== アバター ===== -->
   <section class="tab-panel" data-tab="avatar">
+    <div id="fixed-gaze-section">
+      <h2 class="section-title">视线设置</h2>
+      <label class="toggle-label" for="fixed-gaze-enabled">
+        <input type="checkbox" id="fixed-gaze-enabled" checked disabled>
+        固定正视
+      </label>
+      <p class="hint">开启后眼睛保持居中，不跟随触摸、倾斜或左右扫视；保留眨眼、表情和嘴部动画。关闭后恢复自然视线。即时生效并保存，无需重启，不会开启语音或调用 API。</p>
+      <p id="fixed-gaze-status" class="hint" role="status">正在读取设置…</p>
+    </div>
     <div id="avatar-dsl-section">
       <h2 class="section-title">顔描画 DSL (Avatar)</h2>
       <p class="hint" style="margin-bottom:0.5rem">
@@ -752,9 +761,18 @@
       <label for="gemini-apikey">Gemini API キー</label>
       <input type="password" id="gemini-apikey" maxlength="256" placeholder="AIza… （変更しない場合は空欄）">
 
-      <label for="xai-apikey">xAI Grok Voice API 密钥</label>
-      <input type="password" id="xai-apikey" maxlength="256" placeholder="xai-…（不修改请留空）">
-      <p class="hint" id="xai-key-status">独立使用 xAI API 密钥；保存并重启后通过 Wi-Fi 直连 Grok Voice。开启下方触摸打断后，轻触屏幕可停止回复。</p>
+      <label for="xai-token-url">StopWatch Agent 令牌服务</label>
+      <input type="url" id="xai-token-url" maxlength="256" placeholder="留空使用本项目的云端令牌服务">
+      <label for="xai-device-token">设备访问口令</label>
+      <input type="password" id="xai-device-token" maxlength="128" placeholder="独立设备口令；不是 xAI API Key，不修改请留空">
+      <p class="hint" id="xai-key-status">通过短期令牌连接已发布的 StopWatch Agent。长期 xAI Key 仅保存在云端。</p>
+      <div id="voice-test-panel">
+        <p class="hint">付费语音测试：需逐次确认，最多 1 轮、60 秒（含连接等待）。完成、停止或超时即断开，不自动重连；开机和保存设置不会启动测试。</p>
+        <button type="button" id="btn-voice-test-start" disabled>确认费用并开始一轮测试</button>
+        <button type="button" id="btn-local-mic-test" disabled>本地录音回放（不联网）</button>
+        <button type="button" id="btn-voice-test-stop">停止并结束会话</button>
+        <p id="voice-test-status" role="status">未连接</p>
+      </div>
 
       <label for="xiaozhi-url">XiaoZhi サーバー URL</label>
       <input type="text" id="xiaozhi-url" maxlength="256" placeholder="ws://192.168.1.10:8000/xiaozhi/v1/">
@@ -1080,6 +1098,67 @@ async function postBinary(path, bytes) {
   }
   return r;
 }
+
+// Polling this local status never contacts xAI. Only the explicitly confirmed
+// button sends start; neither load/save/reboot nor status polling starts a test.
+let voiceTestBusy = false;
+let voiceApprovalId = 0;
+async function refreshVoiceTestStatus() {
+  if (voiceTestBusy || $('provider').value !== '3') return;
+  try {
+    const s = await fetchJSON('/api/voice-test');
+    voiceApprovalId = s.approval_id;
+    const labels = { idle: '未连接', queued: '等待开始', running: '测试中', stopping: '正在断开' };
+    const reasons = { completed: s.mode === 'local' ? '本地回放完成' : '回复完成', cancelled: '已停止', timeout: '已到时限', error: '发生错误', interrupted: '连接中断' };
+    $('voice-test-status').textContent = `${labels[s.phase] || '状态未知'}${s.phase === 'idle' && reasons[s.reason] ? ' · ' + reasons[s.reason] : ''}${s.phase === 'running' || s.phase === 'queued' ? ' · 剩余 ' + Math.ceil(s.remaining_ms / 1000) + ' 秒' : ''}${!s.available ? ' · 请保存为 Grok 对话模式后重启' : ''}`;
+    $('btn-voice-test-start').disabled = !s.available || s.phase !== 'idle';
+    $('btn-local-mic-test').disabled = !s.available || s.phase !== 'idle';
+    if (s.mode === 'local' && s.phase !== 'idle') $('voice-test-status').textContent = '本地录音回放，不上传、不调用 API · 剩余 ' + Math.ceil(s.remaining_ms / 1000) + ' 秒';
+  } catch (_) {
+    $('btn-voice-test-start').disabled = true;
+    $('btn-local-mic-test').disabled = true;
+    $('voice-test-status').textContent = '无法确认设备状态；未启动测试';
+  }
+}
+$('btn-voice-test-start').addEventListener('click', async () => {
+  if (voiceTestBusy) return;
+  const approvalId = voiceApprovalId;
+  const ok = window.confirm('本次会调用 xAI 付费 API，包括 Agent 可能调用的已启用搜索工具。\n最多 1 轮回复、60 秒（含连接等待）；完成、停止、超时或出错后断开，不自动重连。\n确认承担本次费用并立即开始吗？');
+  if (!ok) return;
+  voiceTestBusy = true;
+  $('btn-voice-test-start').disabled = true;
+  try {
+    const r = await fetch('/api/voice-test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ op: 'start', confirm_paid: true, max_rounds: 1, max_seconds: 60, approval_id: approvalId }) });
+    if (!r.ok) throw new Error(`设备拒绝启动 (${r.status})`);
+    $('voice-test-status').textContent = '已确认本次费用，正在开始测试';
+  } catch (e) {
+    $('voice-test-status').textContent = '启动结果未确认，请点“停止并结束会话”并检查设备；不会自动重试';
+  } finally { voiceTestBusy = false; }
+});
+$('btn-local-mic-test').addEventListener('click', async () => {
+  if (voiceTestBusy) return;
+  const approvalId = voiceApprovalId;
+  if (!window.confirm('本地检查：麦克风开启约 8 秒（含 3 秒预热倒计时），随后回放最后 5 秒。\n看到“请说话”后说“介绍一下自己”。录音仅在设备内存中，结束即清除，不上传、不调用 API、无 API 费用。\n现在已准备好开始吗？')) return;
+  voiceTestBusy = true;
+  $('btn-local-mic-test').disabled = true;
+  $('btn-voice-test-start').disabled = true;
+  try {
+    const r = await fetch('/api/voice-test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ op: 'record_local', confirm_local_recording: true, record_seconds: 5, approval_id: approvalId }) });
+    if (!r.ok) throw new Error('local_record_failed');
+    $('voice-test-status').textContent = '本地倒计时开始，请看设备提示；不会连接云端';
+  } catch (_) {
+    $('voice-test-status').textContent = '本地检查启动未确认；可点停止，不会自动重试';
+  } finally { voiceTestBusy = false; }
+});
+$('btn-voice-test-stop').addEventListener('click', async () => {
+  // Stop remains available while a start request is pending.
+  try {
+    const r = await fetch('/api/voice-test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ op: 'stop' }) });
+    if (!r.ok) throw new Error('stop_failed');
+    $('voice-test-status').textContent = '已请求停止，正在确认断开';
+  } catch (_) { $('voice-test-status').textContent = '停止未确认，请将设备彻底关机'; }
+});
+setInterval(refreshVoiceTestStatus, 1000);
 
 function setFlag(id, on) {
   $(id).classList.toggle('set', !!on);
@@ -1471,9 +1550,10 @@ async function refresh() {
 
     $('ssid').value = s.ssid || '';
     $('provider').value = String(s.provider ?? 0);
-    $('xai-key-status').textContent = s.has_xai_key
-      ? 'xAI 密钥已保存。留空可保留；开启触摸打断后，轻触屏幕可停止回复。'
-      : '请填写独立的 xAI API 密钥。保存并重启后通过 Wi-Fi 直连 Grok Voice。';
+    $('xai-token-url').value = s.xai_token_url || '';
+    $('xai-key-status').textContent = s.has_xai_device_token
+      ? '设备口令已配置。通过云端短期令牌连接已发布的 Agent；轻触屏幕可停止回复。'
+      : '请配置独立设备访问口令。长期 xAI Key 仅保存在云端。';
     $('openai-enabled').checked = !!s.openai_enabled;
     if (typeof s.operation_mode === 'number') {
       $('operation-mode').value = String(s.operation_mode);
@@ -1482,6 +1562,9 @@ async function refresh() {
       $('audio-output').value = String(s.audio_output);
     }
     $('barge-in-enabled').checked = !!s.barge_in_enabled; // default false if absent
+    $('fixed-gaze-enabled').checked = (s.fixed_gaze_enabled !== false);
+    $('fixed-gaze-enabled').disabled = false;
+    $('fixed-gaze-status').textContent = s.fixed_gaze_enabled !== false ? '固定正视已开启' : '自然视线已开启';
     $('rtp-enabled').checked = (s.rtp_audio_enabled !== false); // default on if absent
     $('jtts-idle-enabled').checked = (s.jtts_idle_enabled !== false); // default on if absent
     $('led-mouth-sync').checked = !!s.led_mouth_sync_enabled; // default off if absent
@@ -1578,7 +1661,8 @@ async function apply() {
     const pass = $('password').value;
     const apiKey = $('apikey').value;
     const geminiKey = $('gemini-apikey').value;
-    const xaiKey = $('xai-apikey').value.trim();
+    const xaiUrl = $('xai-token-url').value.trim();
+    const xaiDeviceToken = $('xai-device-token').value.trim();
     const provider = $('provider').value;
     const enabled = $('openai-enabled').checked;
     const rtpEnabled = $('rtp-enabled').checked;
@@ -1593,7 +1677,8 @@ async function apply() {
     if (pass)      { await postText('/api/password', pass);                   log('パスワード送信', 'ok'); }
     if (apiKey)    { await postText('/api/api-key', apiKey);                  log('OpenAI キー送信', 'ok'); }
     if (geminiKey) { await postText('/api/gemini-api-key', geminiKey);        log('Gemini キー送信', 'ok'); }
-    if (xaiKey) { await postText('/api/xai-api-key', xaiKey); log('xAI 密钥已发送', 'ok'); }
+    await postText('/api/xai-token-url', xaiUrl);
+    if (xaiDeviceToken) { await postText('/api/xai-device-token', xaiDeviceToken); log('设备访问口令已发送', 'ok'); }
     const xzUrl = $('xiaozhi-url').value.trim();
     const xzToken = $('xiaozhi-token').value;
     if (xzUrl)     { await postText('/api/xiaozhi-url', xzUrl);               log('XiaoZhi URL 送信', 'ok'); }
@@ -2057,6 +2142,21 @@ $('ota-release-select').addEventListener('change', (e) => {
   if (e.target.value) $('ota-release-tag').value = e.target.value;
 });
 
+$('fixed-gaze-enabled').addEventListener('change', async (event) => {
+  const control = event.target;
+  const enabled = control.checked;
+  control.disabled = true;
+  try {
+    await postText('/api/fixed-gaze', enabled ? '1' : '0');
+    $('fixed-gaze-status').textContent = enabled ? '固定正视已开启并保存' : '自然视线已开启并保存';
+  } catch (error) {
+    control.checked = !enabled;
+    $('fixed-gaze-status').textContent = '保存失败，请刷新页面确认：' + error.message;
+  } finally {
+    control.disabled = false;
+  }
+});
+
 refresh();
 
 // 設定ごとの「再起動が必要 / 即時反映」バッジを /api/reboot-required から
@@ -2064,7 +2164,9 @@ refresh();
 // 手書きヒントのように陳腐化しない。BADGE_FIELDS = registry id → 対象コントロールの
 // DOM id。checkbox は toggle-label ごと、input/select はコントロール直後に置く。
 const BADGE_FIELDS = {
-  'ssid':'ssid', 'password':'password', 'provider':'provider', 'xai-api-key':'xai-apikey',
+  'fixed-gaze':'fixed-gaze-enabled',
+  'ssid':'ssid', 'password':'password', 'provider':'provider',
+  'xai-token-url':'xai-token-url', 'xai-device-token':'xai-device-token',
   'operation-mode':'operation-mode', 'audio-output':'audio-output',
   'lip-sync-mode':'lip-sync-mode', 'led-mouth-sync':'led-mouth-sync',
   'barge-in':'barge-in-enabled', 'startup-arpeggio':'startup-arpeggio-enabled',

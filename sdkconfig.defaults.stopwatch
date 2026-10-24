@@ -37,3 +37,9 @@ CONFIG_JTTS_ENABLE_HMM=y
 # hts_engine の合成 (ラベル パース等のスタック ローカル) が main タスクの
 # 既定 8 KB を溢れさせるため増量。
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
+
+# Local, opt-in Chinese command recognition. No runtime microphone or cloud
+# session starts on boot. Model fits the existing 0x240000 model partition.
+CONFIG_STACKCHAN_JINGTONG_WAKE=y
+CONFIG_MODEL_IN_FLASH=y
+CONFIG_SR_MN_CN_MULTINET5_RECOGNITION_QUANT8=y

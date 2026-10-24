@@ -111,8 +111,9 @@ enum class Var : std::uint8_t {
     ExprHold2Blend = 0x24,
     VarCount,
     // aora eye-ring coordinate range: [RingBase, RingBase + kRingVarCount). Layout
-    // l0x,l0y..l47x,l47y,r0x..r47y (screen coordinates, interpolated in C++ every frame). The data comes
-    // from DrawContext::aora_ring; a null pointer reads 0.
+    // l0x,l0y..l47x,l47y,r0x..r47y. The VM maps DrawContext::aora_ring's
+    // 320x240 design coordinates to screen coordinates (same as tx/ty).
+    // A null pointer reads 0.
     RingBase = 0x25,
 };
 

@@ -7,6 +7,16 @@
 menu "Stack-chan QR scanner (Phase 1+2 test)"
 
 
+    config STACKCHAN_JINGTONG_WAKE
+        bool "Experimental local ni hao jing tong command spotting"
+        default n
+        depends on IDF_TARGET_ESP32S3
+        help
+            StopWatch Saved-Agent only. Opt-in local microphone recognition;
+            a recognized phrase only offers a cost confirmation, never connects.
+            Requires mn5q8_cn in the existing model partition. Not a trained
+            custom WakeNet model; false acceptance/rejection needs device QA.
+
     config STACKCHAN_ASR_ENABLED
         bool "Enable on-device ASR (esp-sr WakeNet wake word)"
         default n

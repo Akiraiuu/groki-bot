@@ -34,7 +34,31 @@ target_include_directories(avatar_test_overlay_publish PRIVATE
     ${AVATAR_ROOT}/include
     ${VM_ROOT}/include
     ${REPO_ROOT}/main
+    ${REPO_ROOT}/components/conversation/include
 )
 target_link_libraries(avatar_test_overlay_publish PRIVATE pthread)
 target_compile_options(avatar_test_overlay_publish PRIVATE -Wall -Wextra)
 add_test(NAME overlay_publish COMMAND avatar_test_overlay_publish)
+
+# Actual eye-ring compositor + animator + settings descriptor, with no device
+# or network access. Also run by the existing sanitizer job.
+add_executable(avatar_test_fixed_gaze test_fixed_gaze.cpp
+    ${AVATAR_ROOT}/animation.cpp
+    ${REPO_ROOT}/components/config_service/settings_registry.cpp
+    ${REPO_ROOT}/components/config_service/staged_config.cpp
+)
+target_include_directories(avatar_test_fixed_gaze PRIVATE
+    ${AVATAR_ROOT}/include ${AVATAR_ROOT} ${VM_ROOT}/include
+    ${REPO_ROOT}/main
+    ${REPO_ROOT}/components/config_service/include
+    ${REPO_ROOT}/components/tl_expected/expected/include
+)
+target_compile_options(avatar_test_fixed_gaze PRIVATE -Wall -Wextra)
+add_test(NAME fixed_gaze COMMAND avatar_test_fixed_gaze)
+
+# Real balloon renderer, using only a drawing surface/font boundary shim.
+add_executable(avatar_test_balloon test_balloon.cpp ${AVATAR_ROOT}/balloon.cpp)
+target_include_directories(avatar_test_balloon PRIVATE
+    ${AVATAR_ROOT} ${VM_ROOT}/include ${REPO_ROOT}/wasm/shim)
+target_compile_options(avatar_test_balloon PRIVATE -Wall -Wextra)
+add_test(NAME balloon COMMAND avatar_test_balloon)

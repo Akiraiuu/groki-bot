@@ -117,7 +117,8 @@ struct LocalWake::Impl {
                 esp_mn_commands_add(2, "jie shao yi xia zi ji") != ESP_OK ||
                 esp_mn_commands_add(3, "zai jian") != ESP_OK ||
                 esp_mn_commands_update() != nullptr) return fail(Wake::Error::Commands);
-            api->set_det_threshold(decoder, 0.90f);
+            // Use this model's native detection defaults. Its result score is
+            // not a calibrated probability for an extra application cutoff.
             samples = api->get_samp_chunksize(decoder);
             if (samples <= 0 || samples > 2048) return fail(Wake::Error::Decoder);
             diag.samples_per_frame.store(static_cast<std::uint32_t>(samples));
@@ -174,17 +175,17 @@ struct LocalWake::Impl {
             diag.detect_max_us.store(std::max(diag.detect_max_us.load(), took));
             if (s == ESP_MN_STATE_DETECTED) {
                 const auto* r = api->get_results(decoder);
-                if (r && r->num > 0) {
+                if (r && r->num > 0 && r->num <= 5) {
                     diag.last_command.store(r->command_id[0]);
                     for (int i = 0; i < std::min(r->num, 5); ++i) {
-                        if (!std::isfinite(r->prob[i])) continue;
-                        const auto score = static_cast<std::uint32_t>(std::clamp(r->prob[i], 0.0f, 1.0f) * 1000);
+                        if (!std::isfinite(r->prob[i]) || r->prob[i] <= 0.0f || r->prob[i] > 1.0f) continue;
+                        const auto score = static_cast<std::uint32_t>(r->prob[i] * 1000);
                         auto& best = r->command_id[i] == 1 ? diag.best_target_per_mille : diag.best_other_per_mille;
                         best.store(std::max(best.load(), score));
                     }
                 }
-                const bool hit = r && r->num > 0 && r->command_id[0] == 1 &&
-                    std::isfinite(r->prob[0]) && r->prob[0] >= 0.90f;
+                const bool hit = r && r->num > 0 && r->num <= 5 && r->command_id[0] == 1 &&
+                    std::isfinite(r->prob[0]) && r->prob[0] > 0.0f && r->prob[0] <= 1.0f;
                 if (!hit) diag.rejected.fetch_add(1);
                 api->clean(decoder);
                 return hit ? Result::Detected : Result::Waiting;

@@ -31,6 +31,7 @@ struct Fixture {
     std::atomic<bool> mic{false}, fail_task{false}, fail_model{false};
     std::atomic<bool> block_create{false}, in_create{false}, release_create{false};
     std::atomic<int> next_command{0};
+    std::atomic<int> result_count{1}, threshold_overrides{0};
     std::atomic<std::int16_t> signal{0};
     std::vector<std::pair<int,std::string>> registered_commands;
     std::atomic<float> probability{0.95f};
@@ -122,11 +123,11 @@ inline esp_mn_iface_t* esp_mn_handle_from_name(char*){
         },
         [](model_iface_data_t*){return 16000;},
         [](model_iface_data_t*){return 480;},
-        [](model_iface_data_t*,float t){assert(t==0.90f);return 0;},
+        [](model_iface_data_t*,float){Fake::f().threshold_overrides++;return 0;},
         [](model_iface_data_t* p){Fake::model_thread();Fake::f().decoders--;delete p;},
         [](model_iface_data_t*){},
         [](model_iface_data_t*,std::int16_t*){Fake::model_thread();Fake::f().detects++;return Fake::f().next_command?ESP_MN_STATE_DETECTED:ESP_MN_STATE_DETECTING;},
-        [](model_iface_data_t*)->esp_mn_results_t*{static esp_mn_results_t r;r.command_id[0]=Fake::f().next_command;r.prob[0]=Fake::f().probability;return &r;}
+        [](model_iface_data_t*)->esp_mn_results_t*{static esp_mn_results_t r;r.num=Fake::f().result_count;r.command_id[0]=Fake::f().next_command;r.prob[0]=Fake::f().probability;return &r;}
     };return &api;
 }
 inline int esp_mn_commands_alloc(const esp_mn_iface_t*,model_iface_data_t*){Fake::model_thread();Fake::f().commands++;return ESP_OK;}

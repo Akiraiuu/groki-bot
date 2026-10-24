@@ -28,6 +28,7 @@ int main(){
         Fake::Fixture f;begin(f,true);LocalWake w;
         until([&]{return w.poll()==R::Checked;});
         assert(f.mic_begins==0&&f.records==0&&f.speaker_ends==0);
+        assert(f.threshold_overrides==0);
         assert(f.maps==0&&f.decoders==0&&f.commands==0);
         assert(state.frames==0&&state.peak==0&&state.samples_per_frame==480);
         // A full phrase must remain available; its prefix/suffix must never
@@ -93,13 +94,22 @@ int main(){
         f.next_command=1;f.probability=std::numeric_limits<float>::quiet_NaN();
         for(int i=0;i<15;i++){assert(w.poll()!=R::Detected);f.now+=20000;std::this_thread::sleep_for(std::chrono::milliseconds(1));}
         assert(state.best_target_per_mille==0);
-        f.probability=0.89f;
-        for(int i=0;i<15;i++){assert(w.poll()!=R::Detected);f.now+=20000;std::this_thread::sleep_for(std::chrono::milliseconds(1));}
-        assert(state.best_target_per_mille>=889&&state.best_target_per_mille<900);
-        f.probability=0.95f;
+        for(float invalid:{0.0f,-0.1f,1.1f,std::numeric_limits<float>::infinity()}){
+            f.probability=invalid;
+            for(int i=0;i<15;i++){assert(w.poll()!=R::Detected);f.now+=20000;std::this_thread::sleep_for(std::chrono::milliseconds(1));}
+        }
+        assert(state.best_target_per_mille==0);
+        f.probability=0.5f;
+        for(int count:{0,6}){
+            f.result_count=count;
+            for(int i=0;i<15;i++){assert(w.poll()!=R::Detected);f.now+=20000;std::this_thread::sleep_for(std::chrono::milliseconds(1));}
+        }
+        assert(state.best_target_per_mille==0);
+        // A valid native detection below 0.90 must survive the app layer.
+        f.result_count=1;
         until([&]{return w.poll()==R::Detected;});
         assert(!state.microphone_active&&f.maps==0&&f.decoders==0&&f.commands==0);
-        assert(state.best_target_per_mille>=949&&state.last_command==1);
+        assert(state.best_target_per_mille==500&&state.last_command==1&&f.threshold_overrides==0);
         close(w);
     }
 }

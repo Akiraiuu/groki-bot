@@ -55,3 +55,10 @@ target_include_directories(avatar_test_fixed_gaze PRIVATE
 )
 target_compile_options(avatar_test_fixed_gaze PRIVATE -Wall -Wextra)
 add_test(NAME fixed_gaze COMMAND avatar_test_fixed_gaze)
+
+# Real balloon renderer, using only a drawing surface/font boundary shim.
+add_executable(avatar_test_balloon test_balloon.cpp ${AVATAR_ROOT}/balloon.cpp)
+target_include_directories(avatar_test_balloon PRIVATE
+    ${AVATAR_ROOT} ${VM_ROOT}/include ${REPO_ROOT}/wasm/shim)
+target_compile_options(avatar_test_balloon PRIVATE -Wall -Wextra)
+add_test(NAME balloon COMMAND avatar_test_balloon)

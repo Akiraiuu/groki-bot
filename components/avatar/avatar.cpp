@@ -241,11 +241,7 @@ const DrawContext& Avatar::draw_context() const noexcept {
 }
 
 void Avatar::set_balloon_text(std::string_view text, std::uint32_t hold_ms) {
-    auto& ctx = impl_->context();
-    ctx.balloon_text = std::string{text};
-    ctx.balloon_hold_ms = hold_ms;
-    ctx.balloon_done = false;
-    ctx.balloon_set_ms = ctx.now_ms;
+    impl_->context().queue_balloon(text, hold_ms);
 }
 
 void Avatar::clear_balloon() noexcept {
@@ -254,6 +250,7 @@ void Avatar::clear_balloon() noexcept {
     impl_->request_full_repaint();
     ctx.balloon_hold_ms = 0;
     ctx.balloon_done = false;
+    ctx.balloon_start_pending = false;
 }
 
 bool Avatar::is_balloon_done() const noexcept {

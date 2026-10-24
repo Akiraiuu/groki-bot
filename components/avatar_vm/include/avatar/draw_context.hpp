@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <string_view>
 
 #include "avatar/expression.hpp"
 #include "avatar/palette.hpp"
@@ -49,8 +50,10 @@ struct DrawContext {
     std::optional<std::string> balloon_text{};
     // Wall-clock used for time-based animation (e.g. balloon marquee).
     std::uint32_t now_ms{0};
-    // Set to `now_ms` whenever balloon_text changes — drives marquee phase.
+    // First actually displayed frame starts the hold/marquee clock. The
+    // avatar clock can be stale after a settings overlay paused rendering.
     std::uint32_t balloon_set_ms{0};
+    bool balloon_start_pending{false};
     // Minimum display time. 0 means "use balloon defaults" (short = a fixed
     // hold, long = one marquee pass).
     std::uint32_t balloon_hold_ms{0};
@@ -58,6 +61,12 @@ struct DrawContext {
     // (i.e. hold time elapsed for short text, or one marquee cycle for long
     // text). The render task polls this and notifies the application.
     bool balloon_done{false};
+    void queue_balloon(std::string_view text, std::uint32_t hold_ms) {
+        balloon_text = std::string{text};
+        balloon_hold_ms = hold_ms;
+        balloon_done = false;
+        balloon_start_pending = true;
+    }
     // aora eye-ring 320x240 design coordinates (non-owning frame-buffer pointer).
     // The VM maps each x/y to the current canvas using the same scale/origin
     // as DSL tx()/ty(), including the round-screen fit.

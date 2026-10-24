@@ -1663,7 +1663,8 @@ esp_err_t handle_paid_voice_status(httpd_req_t* req)
     char body[1400];
     std::snprintf(body, sizeof(body),
         "{\"phase\":\"%s\",\"reason\":\"%s\",\"available\":%s,\"remaining_ms\":%lld,\"max_rounds\":1,\"max_seconds\":60,\"approval_id\":%u,\"mode\":\"%s\",\"local_record_seconds\":5,\"local_max_seconds\":15,"
-        "\"local_wake\":{\"enabled\":%s,\"check_only\":%s,\"state\":%d,\"stage\":%d,\"error\":%d,\"microphone_active\":%s,\"worker_active\":%s,\"remaining_ms\":%u,\"previous_stage\":%u,\"reset_reason\":%d,\"internal_free\":%u,\"psram_free\":%u,\"stack_free\":%u}}",
+        "\"local_wake\":{\"enabled\":%s,\"check_only\":%s,\"state\":%d,\"stage\":%d,\"error\":%d,\"microphone_active\":%s,\"worker_active\":%s,\"remaining_ms\":%u,\"previous_stage\":%u,\"reset_reason\":%d,\"internal_free\":%u,\"psram_free\":%u,\"stack_free\":%u,"
+        "\"frames\":%u,\"samples_per_frame\":%u,\"peak\":%u,\"mean_abs_peak\":%u,\"clipped_samples\":%u,\"timeouts\":%u,\"rejected\":%u,\"detect_max_us\":%u,\"last_command\":%d,\"best_target_per_mille\":%u,\"best_other_per_mille\":%u}}",
         phases[static_cast<int>(s.phase)], reasons[static_cast<int>(s.reason)], s.available ? "true" : "false",
         static_cast<long long>(s.remaining_ms), static_cast<unsigned>(s.approval_id),
         s.mode == conversation::PaidVoiceTest::Mode::Local ? "local" : "paid",
@@ -1674,7 +1675,13 @@ esp_err_t handle_paid_voice_status(httpd_req_t* req)
         static_cast<unsigned>(w.previous_stage.load()), static_cast<int>(esp_reset_reason()),
         static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)),
         static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM)),
-        static_cast<unsigned>(w.stack_free_bytes.load()));
+        static_cast<unsigned>(w.stack_free_bytes.load()),
+        static_cast<unsigned>(w.frames.load()), static_cast<unsigned>(w.samples_per_frame.load()),
+        static_cast<unsigned>(w.peak.load()), static_cast<unsigned>(w.mean_abs_peak.load()),
+        static_cast<unsigned>(w.clipped_samples.load()), static_cast<unsigned>(w.timeouts.load()),
+        static_cast<unsigned>(w.rejected.load()), static_cast<unsigned>(w.detect_max_us.load()),
+        w.last_command.load(), static_cast<unsigned>(w.best_target_per_mille.load()),
+        static_cast<unsigned>(w.best_other_per_mille.load()));
     httpd_resp_set_hdr(req, "Cache-Control", "no-store");
     return send_json(req, std::string{body});
 }

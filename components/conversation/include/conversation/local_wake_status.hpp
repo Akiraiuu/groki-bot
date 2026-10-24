@@ -28,6 +28,16 @@ struct LocalWakeStatus {
     std::atomic<std::uint32_t> stack_free_bytes{0}, previous_stage{0};
     std::atomic<std::uint32_t> stop_request{0}, stop_ack{0};
     std::atomic<bool> stop_notice{false};
+    // Aggregate signal/decoder counters only. Never retain PCM or transcripts.
+    std::atomic<std::uint32_t> frames{0}, samples_per_frame{0}, peak{0}, mean_abs_peak{0};
+    std::atomic<std::uint32_t> clipped_samples{0}, timeouts{0}, rejected{0}, detect_max_us{0};
+    std::atomic<std::uint32_t> best_target_per_mille{0}, best_other_per_mille{0};
+    std::atomic<int> last_command{0};
+    void reset_observations() {
+        frames=0; samples_per_frame=0; peak=0; mean_abs_peak=0;
+        clipped_samples=0; timeouts=0; rejected=0; detect_max_us=0;
+        best_target_per_mille=0; best_other_per_mille=0; last_command=0;
+    }
     std::uint32_t remaining(std::uint32_t now) const {
         if (!enabled.load()) return 0;
         return local_wake_remaining(started_ms.load(),

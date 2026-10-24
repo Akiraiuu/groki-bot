@@ -1,5 +1,6 @@
 #pragma once
 #include <atomic>
+#include <algorithm>
 #include <cassert>
 #include <chrono>
 #include <cmath>
@@ -9,6 +10,9 @@
 #include <cstring>
 #include <mutex>
 #include <thread>
+#include <string>
+#include <utility>
+#include <vector>
 
 #define CONFIG_STACKCHAN_JINGTONG_WAKE 1
 #define RTC_NOINIT_ATTR
@@ -27,6 +31,8 @@ struct Fixture {
     std::atomic<bool> mic{false}, fail_task{false}, fail_model{false};
     std::atomic<bool> block_create{false}, in_create{false}, release_create{false};
     std::atomic<int> next_command{0};
+    std::atomic<std::int16_t> signal{0};
+    std::vector<std::pair<int,std::string>> registered_commands;
     std::atomic<float> probability{0.95f};
     std::atomic<std::size_t> internal{131072}, psram{6*1024*1024};
     std::atomic<std::int64_t> record_end{0};
@@ -82,7 +88,7 @@ struct FakeMic {
     void end(){Fake::model_thread();Fake::f().mic=false;}
     bool record(std::int16_t* p,std::size_t n,unsigned rate,bool stereo){
         Fake::model_thread();auto& f=Fake::f();assert(f.mic&&rate==16000&&!stereo);
-        std::memset(p,0,n*sizeof(*p));f.records++;f.record_end=f.now+n*1000000/rate;return true;
+        std::fill_n(p,n,f.signal.load());f.records++;f.record_end=f.now+n*1000000/rate;return true;
     }
     bool isRecording(){return Fake::f().now<Fake::f().record_end;}
 };
@@ -125,6 +131,6 @@ inline esp_mn_iface_t* esp_mn_handle_from_name(char*){
 }
 inline int esp_mn_commands_alloc(const esp_mn_iface_t*,model_iface_data_t*){Fake::model_thread();Fake::f().commands++;return ESP_OK;}
 inline int esp_mn_commands_clear(){return ESP_OK;}
-inline int esp_mn_commands_add(int,const char*){return ESP_OK;}
+inline int esp_mn_commands_add(int id,const char* text){Fake::model_thread();Fake::f().registered_commands.emplace_back(id,text);return ESP_OK;}
 inline esp_mn_error_t* esp_mn_commands_update(){return nullptr;}
 inline int esp_mn_commands_free(){Fake::model_thread();Fake::f().commands--;return ESP_OK;}

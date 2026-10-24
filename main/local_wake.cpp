@@ -112,13 +112,15 @@ struct LocalWake::Impl {
             commands = true;
             if (esp_mn_commands_clear() != ESP_OK ||
                 esp_mn_commands_add(1, "ni hao jing tong") != ESP_OK ||
-                esp_mn_commands_add(2, "ni hao") != ESP_OK ||
-                esp_mn_commands_add(2, "jing tong") != ESP_OK ||
+                // A prefix/suffix competitor can complete first; cleaning its
+                // result would discard part of the intended full phrase.
                 esp_mn_commands_add(2, "jie shao yi xia zi ji") != ESP_OK ||
+                esp_mn_commands_add(3, "zai jian") != ESP_OK ||
                 esp_mn_commands_update() != nullptr) return fail(Wake::Error::Commands);
             api->set_det_threshold(decoder, 0.90f);
             samples = api->get_samp_chunksize(decoder);
             if (samples <= 0 || samples > 2048) return fail(Wake::Error::Decoder);
+            diag.samples_per_frame.store(static_cast<std::uint32_t>(samples));
             if (!owner.permitted()) return false;
             if (owner.check_only) return true; // NO mic/speaker action in self-check
             pcm = static_cast<std::int16_t*>(heap_caps_aligned_alloc(16, 2 * samples * sizeof(std::int16_t),
@@ -155,15 +157,39 @@ struct LocalWake::Impl {
                 ESP_LOGI("local-wake", "offline detector ready; no token/socket/upload");
                 return Result::Waiting;
             }
+            std::uint32_t peak = 0, absolute_sum = 0, clipped = 0;
+            for (int i = 0; i < samples; ++i) {
+                const auto n = static_cast<std::int32_t>(completed[i]);
+                const auto magnitude = static_cast<std::uint32_t>(n < 0 ? -n : n);
+                peak = std::max(peak, magnitude); absolute_sum += magnitude;
+                if (magnitude >= 32700) ++clipped;
+            }
+            diag.frames.fetch_add(1);
+            diag.peak.store(std::max(diag.peak.load(), peak));
+            diag.mean_abs_peak.store(std::max(diag.mean_abs_peak.load(), absolute_sum / samples));
+            diag.clipped_samples.fetch_add(clipped);
+            const auto before = esp_timer_get_time();
             const auto s = api->detect(decoder, completed);
+            const auto took = static_cast<std::uint32_t>(std::max<std::int64_t>(0, esp_timer_get_time() - before));
+            diag.detect_max_us.store(std::max(diag.detect_max_us.load(), took));
             if (s == ESP_MN_STATE_DETECTED) {
                 const auto* r = api->get_results(decoder);
+                if (r && r->num > 0) {
+                    diag.last_command.store(r->command_id[0]);
+                    for (int i = 0; i < std::min(r->num, 5); ++i) {
+                        if (!std::isfinite(r->prob[i])) continue;
+                        const auto score = static_cast<std::uint32_t>(std::clamp(r->prob[i], 0.0f, 1.0f) * 1000);
+                        auto& best = r->command_id[i] == 1 ? diag.best_target_per_mille : diag.best_other_per_mille;
+                        best.store(std::max(best.load(), score));
+                    }
+                }
                 const bool hit = r && r->num > 0 && r->command_id[0] == 1 &&
                     std::isfinite(r->prob[0]) && r->prob[0] >= 0.90f;
+                if (!hit) diag.rejected.fetch_add(1);
                 api->clean(decoder);
                 return hit ? Result::Detected : Result::Waiting;
             }
-            if (s == ESP_MN_STATE_TIMEOUT) api->clean(decoder);
+            if (s == ESP_MN_STATE_TIMEOUT) { diag.timeouts.fetch_add(1); api->clean(decoder); }
             return Result::Waiting;
         }
     };
@@ -204,6 +230,7 @@ bool LocalWake::close() {
 LocalWake::Result LocalWake::poll() {
     if (!impl_) {
         diag.error.store(Wake::Error::None);
+        diag.reset_observations();
         diag.stage.store(Wake::Stage::Allocate);
         void* memory = heap_caps_malloc(sizeof(Impl), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
         impl_ = memory ? new (memory) Impl : nullptr;

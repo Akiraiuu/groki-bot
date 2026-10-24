@@ -29,12 +29,26 @@ int main(){
         until([&]{return w.poll()==R::Checked;});
         assert(f.mic_begins==0&&f.records==0&&f.speaker_ends==0);
         assert(f.maps==0&&f.decoders==0&&f.commands==0);
+        assert(state.frames==0&&state.peak==0&&state.samples_per_frame==480);
+        // A full phrase must remain available; its prefix/suffix must never
+        // complete as a competing command and clear the decoder midway.
+        bool full=false;
+        for(const auto& [id,text]:f.registered_commands){
+            if(id==1&&text=="ni hao jing tong")full=true;
+            assert(text!="ni hao"&&text!="jing tong");
+        }
+        assert(full);
         assert(state.worker_active);close(w);
     }
     {
-        Fake::Fixture f;begin(f);LocalWake w;
+        Fake::Fixture f;f.signal=1200;begin(f);LocalWake w;
         until([&]{return w.poll()==R::Waiting;});
         assert(f.now>=1500000&&f.mic&&state.microphone_active);
+        until([&]{return f.detects>=3;});
+        assert(state.frames>=3&&state.peak==1200&&state.mean_abs_peak==1200&&state.clipped_samples==0);
+        f.signal=std::numeric_limits<std::int16_t>::min();
+        until([&]{return state.clipped_samples>0;});
+        assert(state.peak==32768); // absolute INT16_MIN must not overflow
         state.note_stop();close(w);assert(f.records>0);
         assert(!stackchan::conversation::paid_voice_test.permitted(1000));
     }
@@ -75,11 +89,17 @@ int main(){
         until([&]{return w.poll()==R::Waiting;});
         f.next_command=2;
         for(int i=0;i<15;i++){assert(w.poll()!=R::Detected);f.now+=20000;std::this_thread::sleep_for(std::chrono::milliseconds(1));}
+        assert(state.rejected>0&&state.best_other_per_mille>=949&&state.best_target_per_mille==0);
         f.next_command=1;f.probability=std::numeric_limits<float>::quiet_NaN();
         for(int i=0;i<15;i++){assert(w.poll()!=R::Detected);f.now+=20000;std::this_thread::sleep_for(std::chrono::milliseconds(1));}
+        assert(state.best_target_per_mille==0);
+        f.probability=0.89f;
+        for(int i=0;i<15;i++){assert(w.poll()!=R::Detected);f.now+=20000;std::this_thread::sleep_for(std::chrono::milliseconds(1));}
+        assert(state.best_target_per_mille>=889&&state.best_target_per_mille<900);
         f.probability=0.95f;
         until([&]{return w.poll()==R::Detected;});
         assert(!state.microphone_active&&f.maps==0&&f.decoders==0&&f.commands==0);
+        assert(state.best_target_per_mille>=949&&state.last_command==1);
         close(w);
     }
 }

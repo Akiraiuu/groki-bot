@@ -551,6 +551,7 @@ private:
             if (!release_wake()) { conv::paid_voice_test.request_stop(Test::Reason::Error); continue; }
             conv::wake_confirmation.cancel();
             paid_input_.reset();
+            paid_session_id_ = conv::paid_voice_test.snapshot(esp_timer_get_time() / 1000).approval_id;
             state_.set_balloon_text("付费语音测试：1轮，最多60秒", 5000);
             // Wi-Fi wait consumes the same budget. No token is requested yet.
             while (!wifi_is_connected() && conv::paid_voice_test.permitted(esp_timer_get_time() / 1000))
@@ -861,6 +862,8 @@ private:
     void set_local(Local s)
     {
         local_ = s;
+        if (provider_ == config::Provider::Grok && s != Local::Listening && s != Local::Thinking)
+            publish_input_ready(false);
         state_.conv.idle.store(s == Local::Listening, std::memory_order_relaxed);
         using avatar::VoiceState;
         VoiceState vs = VoiceState::Idle;
@@ -1042,11 +1045,17 @@ private:
         enter_listening();
     }
 
-    // Double-buffered mic streaming. M5.Mic keeps a 2-deep queue; when one
-    // slot frees, push that chunk upstream and re-queue it.
+    // Readiness is observational and bound to the claimed paid session.
+    bool publish_input_ready(bool ready)
+    {
+        return conv::paid_voice_test.update_input_ready(esp_timer_get_time() / 1000, paid_session_id_, ready);
+    }
+
+    // Double-buffered mic streaming: send the completed slot, then re-queue it.
     void service_mic()
     {
         if (provider_ == config::Provider::Grok && !paid_input_.open()) {
+            publish_input_ready(false);
             vTaskDelay(pdMS_TO_TICKS(5));
             return;
         }
@@ -1084,8 +1093,22 @@ private:
                     mic_window_since_ms_ = now_ms();
                 }
             }
-            if (!M5.Mic.record(mic_buf_[mic_read_].data(), mic_buf_[mic_read_].size(), mic_sample_rate_, /*stereo=*/false)
-                && provider_ == config::Provider::Grok) ++mic_window_record_errors_;
+            const bool recorded = M5.Mic.record(mic_buf_[mic_read_].data(), mic_buf_[mic_read_].size(), mic_sample_rate_, /*stereo=*/false);
+            if (provider_ == config::Provider::Grok) {
+                if (!recorded) {
+                    ++mic_window_record_errors_;
+                    publish_input_ready(false);
+                    conv::paid_voice_test.request_stop(conv::PaidVoiceTest::Reason::Error);
+                    return;
+                }
+                const bool ready = pushed && mic_settle_samples_ == 0 && paid_input_.open();
+                const bool published = publish_input_ready(ready);
+                if (ready && published && !paid_ready_announced_) {
+                    paid_ready_announced_ = true;
+                    ESP_LOGI(kTag, "session ready: microphone warmed and uplink accepting audio");
+                    state_.set_balloon_text("收音已就绪，请说一句产品问题", 10000);
+                }
+            }
             mic_read_ ^= 1;
         } else {
             vTaskDelay(pdMS_TO_TICKS(5));
@@ -1094,6 +1117,10 @@ private:
 
     void enter_listening()
     {
+        if (provider_ == config::Provider::Grok) {
+            publish_input_ready(false);
+            paid_ready_announced_ = false;
+        }
         M5.Speaker.end();
         vTaskDelay(kI2sSettle);
         state_.face.mouth_open.store(0.0f, std::memory_order_relaxed);
@@ -1113,12 +1140,15 @@ private:
         state_.barge_in_request.store(false, std::memory_order_relaxed);
         // Prime the 2-deep mic queue.
         mic_settle_samples_ = provider_ == config::Provider::Grok ? mic_sample_rate_ * 160u / 1000u : 0;
-        M5.Mic.record(mic_buf_[0].data(), mic_buf_[0].size(), mic_sample_rate_, /*stereo=*/false);
-        M5.Mic.record(mic_buf_[1].data(), mic_buf_[1].size(), mic_sample_rate_, /*stereo=*/false);
+        const bool first_recorded = M5.Mic.record(mic_buf_[0].data(), mic_buf_[0].size(), mic_sample_rate_, /*stereo=*/false);
+        const bool second_recorded = M5.Mic.record(mic_buf_[1].data(), mic_buf_[1].size(), mic_sample_rate_, /*stereo=*/false);
+        if (provider_ == config::Provider::Grok && (!first_recorded || !second_recorded)) {
+            M5.Mic.end();
+            conv::paid_voice_test.request_stop(conv::PaidVoiceTest::Reason::Error);
+            return;
+        }
         mic_read_ = 0;
         set_local(Local::Listening);
-        if (provider_ == config::Provider::Grok)
-            state_.set_balloon_text("收音已就绪，请说一句产品问题", 10000);
     }
 
     // Switch the I2S bus to the speaker and begin streaming playback. Called
@@ -1126,6 +1156,7 @@ private:
     // shorter than the jitter buffer) — assistant_pcm_ may still be growing.
     void start_speaking()
     {
+        if (provider_ == config::Provider::Grok) publish_input_ready(false);
         M5.Mic.end();
         vTaskDelay(kI2sSettle);
         seg_pos_ = 0;
@@ -1257,7 +1288,7 @@ private:
             // session is live. Later protocol transitions are ignored — the
             // local state machine owns mic/speaker timing.
             if (local_ == Local::Init && ev.state == conv::ConversationState::Listening) {
-                ESP_LOGI(kTag, "session ready");
+                ESP_LOGI(kTag, "transport setup accepted; preparing microphone");
                 state_.conv.active.store(true, std::memory_order_relaxed);
                 enter_listening();
             }
@@ -1304,6 +1335,7 @@ private:
 
         case conv::ConversationEventType::UserTranscript:
             if (provider_ == config::Provider::Grok && !paid_input_.open()) {
+                publish_input_ready(false);
                 M5.Mic.end();
                 ESP_LOGI(kTag, "recognized input complete; microphone and queued uplink stopped");
             }
@@ -1661,6 +1693,8 @@ private:
     std::uint32_t mic_window_frames_{0}, mic_window_samples_{0}, mic_window_clipped_{0};
     std::size_t mic_settle_samples_{0};
     conv::SingleTurnInput paid_input_;
+    std::uint32_t paid_session_id_{0};
+    bool paid_ready_announced_{false};
     std::uint32_t mic_window_send_errors_{0}, mic_window_record_errors_{0}, mic_window_since_ms_{0};
     std::int64_t mic_window_energy_{0};
     int mic_window_peak_{0};

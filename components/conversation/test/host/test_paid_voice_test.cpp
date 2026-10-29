@@ -11,8 +11,79 @@ using namespace stackchan::conversation;
 using Phase = PaidVoiceTest::Phase;
 using Reason = PaidVoiceTest::Reason;
 
+static void test_wifi_input_readiness()
+{
+    PaidVoiceTest p;
+    assert(!p.snapshot(0).input_ready);
+    assert(!p.update_input_ready(0, 1, true));
+    p.set_available(true, 91);
+    assert(p.request_start(true, 100, 91));
+    auto id = p.snapshot(100).approval_id;
+    assert(!p.snapshot(100).input_ready);
+    assert(!p.update_input_ready(101, id, true)); // Queue is not an open microphone.
+    assert(p.claim(102));
+    assert(!p.snapshot(102).input_ready); // Session setup is not enough.
+    assert(!p.update_input_ready(103, 0, true));
+    assert(!p.update_input_ready(103, 91, true)); // Pre-start approval is stale.
+    assert(p.update_input_ready(104, id, true));
+    assert(p.snapshot(104).input_ready);
+    assert(p.update_input_ready(105, id, false));
+    assert(!p.snapshot(105).input_ready); // Transcript/output can close input independently.
+    assert(p.update_input_ready(106, id, true));
+    assert(p.snapshot(106).remaining_ms == 59994); // Readiness never extends permission.
+    assert(!p.update_input_ready(-1, id, true));
+    assert(!p.snapshot(60100).input_ready); // Exact deadline clears even before teardown.
+    assert(!p.update_input_ready(60100, id, true));
+    p.finish();
+    assert(!p.snapshot(60101).input_ready);
+
+    for (auto reason : {Reason::Completed, Reason::Cancelled, Reason::Error, Reason::Interrupted}) {
+        const auto before = p.snapshot(70000).approval_id;
+        assert(p.request_start(true, 70000, before));
+        assert(p.claim(70001));
+        const auto current = p.snapshot(70001).approval_id;
+        assert(p.update_input_ready(70002, current, true));
+        assert(!p.update_input_ready(70003, id, false)); // Old callbacks cannot clear a new session.
+        assert(!p.update_input_ready(70003, id, true));
+        assert(p.snapshot(70003).input_ready);
+        p.request_stop(reason);
+        assert(!p.snapshot(70004).input_ready);
+        assert(!p.update_input_ready(70005, current, true));
+        p.finish();
+        id = current;
+    }
+    auto before = p.snapshot(80000).approval_id;
+    assert(p.request_start(true, 80000, before));
+    assert(p.claim(80001));
+    id = p.snapshot(80001).approval_id;
+    assert(p.update_input_ready(80002, id, true));
+    p.set_available(false);
+    assert(!p.snapshot(80003).input_ready);
+    assert(!p.update_input_ready(80004, id, true));
+    p.finish();
+
+    PaidVoiceTest local;
+    local.set_available(true, 8);
+    assert(local.request_start(true, 0, 8, PaidVoiceTest::Mode::Local));
+    assert(local.claim(1, PaidVoiceTest::Mode::Local));
+    assert(!local.update_input_ready(2, local.snapshot(2).approval_id, true));
+    assert(!local.snapshot(2).input_ready && !local.permitted(2));
+
+    PaidVoiceTest concurrent;
+    concurrent.set_available(true, 11);
+    assert(concurrent.request_start(true, 0, 11) && concurrent.claim(1));
+    id = concurrent.snapshot(1).approval_id;
+    std::thread producer([&] { for (int i = 0; i < 1000; ++i) concurrent.update_input_ready(2, id, true); });
+    concurrent.request_stop();
+    producer.join();
+    assert(!concurrent.snapshot(3).input_ready);
+    PaidVoiceTest rebooted;
+    assert(!rebooted.snapshot(3).input_ready);
+}
+
 int main()
 {
+    test_wifi_input_readiness();
     SingleTurnInput input;
     ConversationEvent event{};
     // Regression: the short VAD noise event immediately after connection had

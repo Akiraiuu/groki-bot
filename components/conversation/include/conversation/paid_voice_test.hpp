@@ -20,10 +20,12 @@ public:
         std::int64_t remaining_ms;
         std::uint32_t approval_id;
         Mode mode;
+        bool input_ready; // Current paid session: transport + warmed microphone input.
     };
     void set_available(bool value, std::uint32_t seed = 1) {
         std::lock_guard lock{mutex_};
         available_ = value;
+        input_ready_ = false;
         if (value) approval_id_ = seed ? seed : 1;
         if (!value && phase_ != Phase::Idle) stop_locked(Reason::Error);
     }
@@ -34,6 +36,7 @@ public:
         phase_ = Phase::Queued;
         reason_ = Reason::None;
         mode_ = mode;
+        input_ready_ = false;
         deadline_ = now + (mode == Mode::Paid ? limit_ms : local_limit_ms);
         return true;
     }
@@ -54,6 +57,16 @@ public:
         expire_locked(now);
         return mode_ == Mode::Local && phase_ == Phase::Running;
     }
+    // A delayed producer from an older session cannot publish or clear readiness.
+    // This is observation only; it never grants permission or extends a deadline.
+    bool update_input_ready(std::int64_t now, std::uint32_t expected_approval, bool ready) {
+        std::lock_guard lock{mutex_};
+        expire_locked(now);
+        if (expected_approval == 0 || expected_approval != approval_id_ ||
+            mode_ != Mode::Paid || phase_ != Phase::Running || !available_ || now < 0) return false;
+        input_ready_ = ready;
+        return true;
+    }
     void request_stop(Reason why = Reason::Cancelled) {
         std::lock_guard lock{mutex_};
         // Even an idle stop invalidates a delayed/in-flight old start request.
@@ -64,16 +77,19 @@ public:
         std::lock_guard lock{mutex_};
         // Retain the last reason for the local status page, not permission.
         phase_ = Phase::Idle;
+        input_ready_ = false;
         deadline_ = 0;
     }
     Snapshot snapshot(std::int64_t now) {
         std::lock_guard lock{mutex_};
         expire_locked(now);
-        return {phase_, reason_, available_, deadline_ > now ? deadline_ - now : 0, approval_id_, mode_};
+        return {phase_, reason_, available_, deadline_ > now ? deadline_ - now : 0, approval_id_, mode_,
+                input_ready_ && available_ && phase_ == Phase::Running && mode_ == Mode::Paid};
     }
 private:
     void next_approval_locked() { if (++approval_id_ == 0) ++approval_id_; }
     void stop_locked(Reason why) {
+        input_ready_ = false;
         if (phase_ == Phase::Queued || phase_ == Phase::Running) {
             phase_ = Phase::Stopping;
             reason_ = why;
@@ -87,6 +103,7 @@ private:
     Reason reason_{Reason::None};
     Mode mode_{Mode::Paid};
     bool available_{false};
+    bool input_ready_{false};
     std::int64_t deadline_{0};
     std::uint32_t approval_id_{1};
 };

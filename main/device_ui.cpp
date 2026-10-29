@@ -54,9 +54,10 @@ enum Page : int {
     kRange = 4,
     kConversation = 5,
     kLtTimer = 6,
+    kWakeControls = 7,
     kTabCount
 };
-const char* const kTabLabels[kTabCount] = {"信息", "设置1", "设置2", "操作", "范围", "对话", "LT"};
+const char* const kTabLabels[kTabCount] = {"信息", "设置1", "设置2", "操作", "范围", "对话", "LT", "唤醒"};
 int num_tab_pages() { return (kTabCount + kTabsPerPage - 1) / kTabsPerPage; }
 
 const auto* const kFontTitle = &fonts::efontCN_16;
@@ -657,22 +658,39 @@ void draw_conversation()
                          : st == SharedState::LocalWakeState::Paused ? "已暂停"
                          : g_state->local_wake.enabled.load() ? "正在准备" : "已关闭";
         draw_kv(y, "离线唤醒", text, warn);
-        g_cv->fillRoundRect(12, 149, 296, 26, 5, g_cv->color565(45, 80, 110));
-        g_cv->fillRoundRect(12, 179, 296, 26, 5, g_cv->color565(55, 75, 85));
-        g_cv->fillRoundRect(12, 209, 296, 26, 5, g_cv->color565(120, 55, 50));
-        g_cv->setTextDatum(lgfx::textdatum_t::middle_center);
-        g_cv->setTextColor(fg);
-        g_cv->drawString(g_state->local_wake.enabled.load() ? "关闭本地识别" : "开启唤醒（最多40秒）", 160, 162);
-        g_cv->drawString("模型自检（不收音）", 160, 192);
-        const bool noticed = g_state->local_wake.stop_notice.load();
-        const bool closed = !g_state->local_wake.worker_active.load() &&
-            !g_state->local_wake.microphone_active.load() &&
-            g_state->local_wake.stop_ack.load() == g_state->local_wake.stop_request.load() &&
-            conversation::paid_voice_test.snapshot(esp_timer_get_time() / 1000).phase == conversation::PaidVoiceTest::Phase::Idle;
-        g_cv->drawString(noticed ? (closed ? "已停止，语音未连接" : "正在停止，请稍候") : "停止语音与唤醒", 160, 222);
+        draw_kv(y + 26, "操作", "请到唤醒页", fg);
     }
 }
 
+constexpr int kWakeX = 12;
+constexpr int kWakeW = 296;
+constexpr int kWakeH = 50;
+constexpr int kWakeStartY = 51;
+constexpr int kWakeCheckY = 115;
+constexpr int kWakeStopY = 179;
+
+void draw_wake_controls()
+{
+    const auto fg = g_cv->color565(235, 235, 235);
+    g_cv->setFont(kFontBody);
+    g_cv->setTextDatum(lgfx::textdatum_t::middle_center);
+    g_cv->setTextColor(fg);
+    if (g_provider != 3 || !g_state->local_wake.available.load()) {
+        g_cv->drawString("本地唤醒不可用", 160, 120);
+        return;
+    }
+    g_cv->fillRoundRect(kWakeX, kWakeStartY, kWakeW, kWakeH, 7, g_cv->color565(45, 80, 110));
+    g_cv->fillRoundRect(kWakeX, kWakeCheckY, kWakeW, kWakeH, 7, g_cv->color565(55, 75, 85));
+    g_cv->fillRoundRect(kWakeX, kWakeStopY, kWakeW, kWakeH, 7, g_cv->color565(120, 55, 50));
+    g_cv->drawString(g_state->local_wake.enabled.load() ? "关闭本地识别" : "开启唤醒（最多40秒）", 160, kWakeStartY + kWakeH / 2);
+    g_cv->drawString("模型自检（不收音）", 160, kWakeCheckY + kWakeH / 2);
+    const bool noticed = g_state->local_wake.stop_notice.load();
+    const bool closed = !g_state->local_wake.worker_active.load() &&
+        !g_state->local_wake.microphone_active.load() &&
+        g_state->local_wake.stop_ack.load() == g_state->local_wake.stop_request.load() &&
+        conversation::paid_voice_test.snapshot(esp_timer_get_time() / 1000).phase == conversation::PaidVoiceTest::Phase::Idle;
+    g_cv->drawString(noticed ? (closed ? "已停止，语音未连接" : "正在停止，请稍候") : "停止语音与唤醒", 160, kWakeStopY + kWakeH / 2);
+}
 void draw_wake_confirmation(const conversation::WakeConfirmation::Snapshot& prompt)
 {
     g_cv->fillScreen(g_cv->color565(20, 22, 28));
@@ -787,6 +805,8 @@ void render_page()
         draw_range();
     } else if (page == kLtTimer) {
         draw_lt_timer();
+    } else if (page == kWakeControls) {
+        draw_wake_controls();
     } else {
         draw_conversation();
     }
@@ -1138,8 +1158,8 @@ bool handle_tap(int x, int y)
             save_range_and_reboot(); // does not return
         }
         if (changed) g_dirty.store(true, std::memory_order_relaxed);
-    } else if (page == kConversation && g_provider == 3 && g_state->local_wake.available.load()) {
-        if (in_rect(x, y, 12, 149, 296, 26) || in_rect(x, y, 12, 179, 296, 26)) {
+    } else if (page == kWakeControls && g_provider == 3 && g_state->local_wake.available.load()) {
+        if (in_rect(x, y, kWakeX, kWakeStartY, kWakeW, kWakeH) || in_rect(x, y, kWakeX, kWakeCheckY, kWakeW, kWakeH)) {
             const auto paid = conversation::paid_voice_test.snapshot(esp_timer_get_time() / 1000);
             if (paid.phase == conversation::PaidVoiceTest::Phase::Idle) {
                 if (g_state->local_wake.enabled.load() || g_state->local_wake.worker_active.load()) {
@@ -1147,7 +1167,7 @@ bool handle_tap(int x, int y)
                     conversation::wake_confirmation.cancel();
                     conversation::paid_voice_test.request_stop();
                 } else {
-                    const bool check = y >= 179;
+                    const bool check = in_rect(x, y, kWakeX, kWakeCheckY, kWakeW, kWakeH);
                     g_state->local_wake.check_only.store(check);
                     g_state->local_wake.started_ms.store(static_cast<std::uint32_t>(esp_timer_get_time() / 1000));
                     g_state->local_wake.approval_id.store(paid.approval_id);
@@ -1157,7 +1177,7 @@ bool handle_tap(int x, int y)
                     g_state->set_balloon_text(check ? "模型自检中，全程不收音" : "正在准备本地识别，请稍候", 5000);
                 }
             }
-        } else if (in_rect(x, y, 12, 209, 296, 26)) {
+        } else if (in_rect(x, y, kWakeX, kWakeStopY, kWakeW, kWakeH)) {
             g_state->local_wake.note_stop();
             conversation::wake_confirmation.cancel();
             conversation::paid_voice_test.request_stop();
@@ -1252,7 +1272,7 @@ bool draw(avatar::RichCanvas& canvas)
     // fields (present-position from the servo task) and wants a faster refresh
     // so the captured raw doesn't lag the user's hand.
     const int page = g_page.load(std::memory_order_relaxed);
-    if (page == kInfo || page == kConversation || page == kLtTimer || page == kSettings2) {
+    if (page == kInfo || page == kConversation || page == kLtTimer || page == kWakeControls || page == kSettings2) {
         const std::uint32_t t = now_ms();
         if (t - g_last_info_ms > 500) {
             g_last_info_ms = t;
@@ -1272,3 +1292,4 @@ bool draw(avatar::RichCanvas& canvas)
 }
 
 } // namespace stackchan::app::ui
+

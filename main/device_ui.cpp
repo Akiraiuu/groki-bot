@@ -1292,4 +1292,3 @@ bool draw(avatar::RichCanvas& canvas)
 }
 
 } // namespace stackchan::app::ui
-

@@ -324,6 +324,8 @@ void on_config_change(const stackchan::config::registry::SettingDescriptor& d,
     } else if (id == "led-mouth-sync") {
         g_state->led.mouth_sync_enabled.store(cfg.led_mouth_sync_enabled,
                                               std::memory_order_relaxed);
+    } else if (id == "fixed-gaze") {
+        g_state->face.fixed_gaze_enabled.store(cfg.fixed_gaze_enabled, std::memory_order_relaxed);
     } else if (id == "barge-in") {
         // demo_loop が毎ループ参照する SharedState atomic。
         g_state->barge_in_enabled.store(cfg.barge_in_enabled, std::memory_order_relaxed);

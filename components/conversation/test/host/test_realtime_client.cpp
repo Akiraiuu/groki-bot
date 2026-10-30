@@ -23,6 +23,9 @@ int main() {
     assert(client.state() == ConversationState::Listening);
     host_receive(R"({"type":"input_audio_buffer.speech_stopped"})");
     assert(client.state() == ConversationState::Thinking);
+    const std::int16_t generic_sample = 1;
+    assert(client.push_audio(std::span<const std::int16_t>{&generic_sample, 1}));
+    assert(uxQueueMessagesWaiting(host_last_queue) == 0); // legacy path still drops input here
     host_receive(R"({"type":"response.created"})");
     host_receive(R"({"type":"response.output_audio.delta","delta":"/w=="})");
     assert(client.state() == ConversationState::Speaking);

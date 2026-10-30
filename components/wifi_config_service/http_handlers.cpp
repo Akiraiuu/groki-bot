@@ -12,6 +12,10 @@
 #include <config_service/settings_registry.hpp>
 #include <config_service/staged_config.hpp>
 #include <wifi_config_service/mcp_events.hpp>
+#include <conversation/paid_voice_test.hpp>
+#include <conversation/paid_voice_command.hpp>
+#include <conversation/local_wake_status.hpp>
+#include <conversation/wake_confirmation.hpp>
 
 #include <algorithm>
 #include <array>
@@ -371,7 +375,7 @@ esp_err_t handle_status_get(httpd_req_t* req)
     const bool wifi_ok = g_wifi_connected.load();
     const bool prov_mode = g_provisioning_mode.load();
     xSemaphoreTake(g_mutex, portMAX_DELAY);
-    const auto cfg = g_active;
+    auto cfg = g_active;
     const int bat_mv = g_battery_mv;
     const int bat_ma = g_battery_ma;
     const int bat_pct = g_battery_pct;
@@ -381,6 +385,8 @@ esp_err_t handle_status_get(httpd_req_t* req)
     const bool has_mcp = !g_mcp_active_token.empty();  // ロック下でスナップショット
     xSemaphoreGive(g_mutex);
 
+    // The physical menu can change this immediate setting independently.
+    cfg.fixed_gaze_enabled = config::load().fixed_gaze_enabled;
     config::ServoPositionsView pos{-1, -1};
     if (pos_getter != nullptr) pos = pos_getter();
 
@@ -400,13 +406,16 @@ esp_err_t handle_status_get(httpd_req_t* req)
     body += "\"has_password\":" + std::string(cfg.wifi_password.empty() ? "false" : "true") + ",";
     body += "\"has_openai_key\":" + std::string(cfg.openai_api_key.empty() ? "false" : "true") + ",";
     body += "\"has_gemini_key\":" + std::string(cfg.gemini_api_key.empty() ? "false" : "true") + ",";
-    body += "\"has_xai_key\":" + std::string(cfg.xai_api_key.empty() ? "false" : "true") + ",";
+    body += "\"has_xai_key\":false,";
+    body += "\"xai_token_url\":\"" + escape_json(cfg.xai_token_url) + "\",";
+    body += "\"has_xai_device_token\":" + std::string(cfg.xai_device_token.empty() ? "false" : "true") + ",";
     body += "\"xiaozhi_url\":\"" + escape_json(cfg.xiaozhi_url) + "\",";
     body += "\"has_xiaozhi_token\":" + std::string(cfg.xiaozhi_token.empty() ? "false" : "true") + ",";
     body += "\"openai_enabled\":" + std::string(cfg.openai_enabled ? "true" : "false") + ",";
     body += "\"rtp_audio_enabled\":" + std::string(cfg.rtp_audio_enabled ? "true" : "false") + ",";
     body += "\"jtts_idle_enabled\":" + std::string(cfg.jtts_idle_enabled ? "true" : "false") + ",";
     body += "\"battery_gauge_enabled\":" + std::string(cfg.battery_gauge_enabled ? "true" : "false") + ",";
+    body += "\"fixed_gaze_enabled\":" + std::string(cfg.fixed_gaze_enabled ? "true" : "false") + ",";
     body += "\"startup_arpeggio_enabled\":" + std::string(cfg.startup_arpeggio_enabled ? "true" : "false") + ",";
     body += "\"servo_enabled\":" + std::string(cfg.servo_enabled ? "true" : "false") + ",";
     body += "\"led_mouth_sync_enabled\":" + std::string(cfg.led_mouth_sync_enabled ? "true" : "false") + ",";
@@ -488,10 +497,27 @@ esp_err_t handle_gemini_api_key_post(httpd_req_t* req)
 esp_err_t handle_xai_api_key_post(httpd_req_t* req)
 {
     if (!require_auth(req)) return ESP_OK;
+    return send_error(req, "400 Bad Request", "long-term xAI keys are no longer accepted; configure the token service");
+}
+
+esp_err_t handle_xai_token_url_post(httpd_req_t* req)
+{
+    if (!require_auth(req)) return ESP_OK;
     std::string body;
     if (read_body_str(req, body, kMaxApiKey) != ESP_OK) return ESP_OK;
     xSemaphoreTake(g_mutex, portMAX_DELAY);
-    g_staging.set_str("xai-api-key", std::move(body));
+    g_staging.set_str("xai-token-url", std::move(body));
+    xSemaphoreGive(g_mutex);
+    return send_empty(req);
+}
+
+esp_err_t handle_xai_device_token_post(httpd_req_t* req)
+{
+    if (!require_auth(req)) return ESP_OK;
+    std::string body;
+    if (read_body_str(req, body, 128) != ESP_OK) return ESP_OK;
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    g_staging.set_str("xai-device-token", std::move(body));
     xSemaphoreGive(g_mutex);
     return send_empty(req);
 }
@@ -641,6 +667,27 @@ esp_err_t handle_barge_in_enabled_post(httpd_req_t* req)
     if (read_body_str(req, body, 8) != ESP_OK) return ESP_OK;
     const bool enabled = !body.empty() && (body[0] == '1' || body[0] == 't' || body[0] == 'y');
     apply_immediate_num("barge-in", enabled ? 1 : 0);  // 即時反映 (SharedState barge_in_enabled)
+    return send_empty(req);
+}
+
+esp_err_t handle_fixed_gaze_post(httpd_req_t* req)
+{
+    if (!require_auth(req)) return ESP_OK;
+    std::string body;
+    if (read_body_str(req, body, 8) != ESP_OK) return ESP_OK;
+    if (body != "0" && body != "1") {
+        return send_error(req, "400 Bad Request", "expected 0 or 1");
+    }
+    const auto* d = config::registry::find("fixed-gaze");
+    config::DeviceConfig cfg;
+    cfg.fixed_gaze_enabled = (body == "1");
+    if (d == nullptr || !config::store::save_one(*d, cfg)) {
+        return send_error(req, "500 Internal Server Error", "fixed-gaze save failed");
+    }
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    g_active.fixed_gaze_enabled = cfg.fixed_gaze_enabled;
+    xSemaphoreGive(g_mutex);
+    config::notify_config_change(*d, cfg);
     return send_empty(req);
 }
 
@@ -821,8 +868,9 @@ esp_err_t handle_settings_get(httpd_req_t* req)
 {
     if (!require_auth(req)) return ESP_OK;
     xSemaphoreTake(g_mutex, portMAX_DELAY);
-    const auto cfg = g_active;
+    auto cfg = g_active;
     xSemaphoreGive(g_mutex);
+    cfg.fixed_gaze_enabled = config::load().fixed_gaze_enabled;
 
     using config::registry::ApplyKind;
     using config::registry::ValueType;
@@ -1605,6 +1653,74 @@ esp_err_t handle_mcp_state_get(httpd_req_t* req)
 
 // --- Audio metrics ---
 
+esp_err_t handle_paid_voice_status(httpd_req_t* req)
+{
+    if (!require_auth(req)) return ESP_OK;
+    const auto s = conversation::paid_voice_test.snapshot(esp_timer_get_time() / 1000);
+    constexpr const char* phases[] = {"idle", "queued", "running", "stopping"};
+    constexpr const char* reasons[] = {"none", "completed", "cancelled", "timeout", "error", "interrupted", "idle_timeout", "farewell", "round_limit"};
+    const auto& w = conversation::local_wake_status;
+    char body[1400];
+    std::snprintf(body, sizeof(body),
+        "{\"phase\":\"%s\",\"reason\":\"%s\",\"available\":%s,\"remaining_ms\":%lld,\"max_rounds\":%u,\"max_seconds\":60,\"completed_rounds\":%u,\"idle_timeout_ms\":%lld,\"idle_remaining_ms\":%lld,\"approval_id\":%u,\"mode\":\"%s\",\"input_ready\":%s,\"fault_source\":\"%s\",\"fault_detail\":%d,\"local_record_seconds\":5,\"local_max_seconds\":15,"
+        "\"local_wake\":{\"enabled\":%s,\"check_only\":%s,\"state\":%d,\"stage\":%d,\"error\":%d,\"microphone_active\":%s,\"worker_active\":%s,\"remaining_ms\":%u,\"previous_stage\":%u,\"reset_reason\":%d,\"internal_free\":%u,\"psram_free\":%u,\"stack_free\":%u,"
+        "\"frames\":%u,\"samples_per_frame\":%u,\"peak\":%u,\"mean_abs_peak\":%u,\"clipped_samples\":%u,\"timeouts\":%u,\"rejected\":%u,\"detect_max_us\":%u,\"last_command\":%d,\"best_target_per_mille\":%u,\"best_other_per_mille\":%u}}",
+        phases[static_cast<int>(s.phase)], reasons[static_cast<int>(s.reason)], s.available ? "true" : "false",
+        static_cast<long long>(s.remaining_ms), static_cast<unsigned>(s.max_rounds), static_cast<unsigned>(s.completed_rounds),
+        static_cast<long long>(s.idle_timeout_ms), static_cast<long long>(s.idle_remaining_ms), static_cast<unsigned>(s.approval_id),
+        s.mode == conversation::PaidVoiceTest::Mode::Local ? "local" : "paid",
+        s.input_ready ? "true" : "false",
+        conversation::PaidVoiceTest::fault_name(s.fault), s.fault_detail,
+        w.enabled.load() ? "true" : "false", w.check_only.load() ? "true" : "false",
+        w.status.load(), static_cast<int>(w.stage.load()), static_cast<int>(w.error.load()),
+        w.microphone_active.load() ? "true" : "false", w.worker_active.load() ? "true" : "false",
+        static_cast<unsigned>(w.remaining(static_cast<std::uint32_t>(esp_timer_get_time() / 1000))),
+        static_cast<unsigned>(w.previous_stage.load()), static_cast<int>(esp_reset_reason()),
+        static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)),
+        static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM)),
+        static_cast<unsigned>(w.stack_free_bytes.load()),
+        static_cast<unsigned>(w.frames.load()), static_cast<unsigned>(w.samples_per_frame.load()),
+        static_cast<unsigned>(w.peak.load()), static_cast<unsigned>(w.mean_abs_peak.load()),
+        static_cast<unsigned>(w.clipped_samples.load()), static_cast<unsigned>(w.timeouts.load()),
+        static_cast<unsigned>(w.rejected.load()), static_cast<unsigned>(w.detect_max_us.load()),
+        w.last_command.load(), static_cast<unsigned>(w.best_target_per_mille.load()),
+        static_cast<unsigned>(w.best_other_per_mille.load()));
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    return send_json(req, std::string{body});
+}
+
+esp_err_t handle_paid_voice_control(httpd_req_t* req)
+{
+    if (!require_auth(req)) return ESP_OK;
+    // JSON content type forces cross-origin browser requests through a CORS
+    // preflight; this device does not grant cross-origin control access.
+    char content_type[64]{};
+    if (httpd_req_get_hdr_value_str(req, "Content-Type", content_type, sizeof(content_type)) != ESP_OK ||
+        std::strncmp(content_type, "application/json", 16) != 0)
+        return send_error(req, "415 Unsupported Media Type", "application/json required");
+    std::string body;
+    if (read_body_str(req, body, 256) != ESP_OK) return ESP_OK;
+    auto* root = cJSON_ParseWithLength(body.data(), body.size());
+    const auto command = conversation::parse_paid_voice_command(root);
+    const auto* id = cJSON_GetObjectItemCaseSensitive(root, "approval_id");
+    const auto approval_id = command == conversation::PaidVoiceCommand::Start || command == conversation::PaidVoiceCommand::StartDialogue || command == conversation::PaidVoiceCommand::LocalRecord
+        ? static_cast<std::uint32_t>(id->valuedouble) : 0;
+    cJSON_Delete(root);
+    using Command = conversation::PaidVoiceCommand;
+    if (command == Command::Invalid)
+        return send_error(req, "400 Bad Request", "Explicit confirmation and exact test limits required");
+    if (command == Command::Stop) {
+        conversation::local_wake_status.note_stop();
+        conversation::wake_confirmation.cancel();
+        conversation::paid_voice_test.request_stop();
+    }
+    else if (!conversation::paid_voice_test.request_start(true, esp_timer_get_time() / 1000, approval_id,
+        command == Command::LocalRecord ? conversation::PaidVoiceTest::Mode::Local : conversation::PaidVoiceTest::Mode::Paid,
+        command == Command::StartDialogue ? conversation::PaidVoiceTest::Profile::Dialogue : conversation::PaidVoiceTest::Profile::SingleReply))
+        return send_error(req, "409 Conflict", "Test unavailable or already active; no new permission granted");
+    return handle_paid_voice_status(req);
+}
+
 // GET /api/metrics/audio — last conversation-turn audio pipeline stats.
 // Returns "{}" when no turn has finished yet (boot fresh / before first
 // reply). Polled by an ops dashboard / phone client; does not require a
@@ -1839,6 +1955,8 @@ void register_handlers(httpd_handle_t server, const config::DeviceConfig& curren
     add(server, "/api/api-key",         HTTP_POST, handle_api_key_post);
     add(server, "/api/gemini-api-key",  HTTP_POST, handle_gemini_api_key_post);
     add(server, "/api/xai-api-key",     HTTP_POST, handle_xai_api_key_post);
+    add(server, "/api/xai-token-url",   HTTP_POST, handle_xai_token_url_post);
+    add(server, "/api/xai-device-token", HTTP_POST, handle_xai_device_token_post);
     add(server, "/api/xiaozhi-url",      HTTP_POST, handle_xiaozhi_url_post);
     add(server, "/api/xiaozhi-token",    HTTP_POST, handle_xiaozhi_token_post);
     add(server, "/api/openai-enabled",  HTTP_POST, handle_openai_enabled_post);
@@ -1850,6 +1968,7 @@ void register_handlers(httpd_handle_t server, const config::DeviceConfig& curren
     add(server, "/api/lip-sync-mode",   HTTP_POST, handle_lip_sync_mode_post);
     add(server, "/api/mic-lip-agc",     HTTP_POST, handle_mic_lip_agc_post);
     add(server, "/api/barge-in",        HTTP_POST, handle_barge_in_enabled_post);
+    add(server, "/api/fixed-gaze",      HTTP_POST, handle_fixed_gaze_post);
     add(server, "/api/battery-gauge",   HTTP_POST, handle_battery_gauge_post);
     add(server, "/api/startup-arpeggio",HTTP_POST, handle_startup_arpeggio_post);
     add(server, "/api/servo-enabled",   HTTP_POST, handle_servo_enabled_post);
@@ -1884,6 +2003,8 @@ void register_handlers(httpd_handle_t server, const config::DeviceConfig& curren
     add(server, "/api/hmm-voice/fetch",  HTTP_POST, handle_hmm_voice_fetch_post);
     add(server, "/api/voices",           HTTP_GET,  handle_voices_get);
     add(server, "/api/metrics/audio",    HTTP_GET,  handle_audio_metrics_get);
+    add(server, "/api/voice-test",       HTTP_GET,  handle_paid_voice_status);
+    add(server, "/api/voice-test",       HTTP_POST, handle_paid_voice_control);
     add(server, "/api/led-state",        HTTP_GET,  handle_led_state_get);
     add(server, "/api/led-state",        HTTP_POST, handle_led_state_post);
     add(server, "/api/mic-lip-gain",     HTTP_GET,  handle_mic_lip_gain_get);

@@ -637,7 +637,7 @@ const I18N = {
     'chat.providerHint': 'Chooses which conversation backend to use. Keys and settings for each one can be saved in the fields below.',
     'chat.openaiKey': 'OpenAI API key',
     'chat.geminiKey': 'Gemini API key',
-    'chat.xaiKey': 'xAI Grok Voice API key',
+    'chat.xaiKey': 'Saved xAI Agent: use Wi-Fi token-service settings',
     'chat.ph.xai': 'xai-… (leave blank to keep)',
     'w.xai': 'xAI key written',
     'chat.xzUrl': 'XiaoZhi server URL',
@@ -1042,7 +1042,7 @@ const I18N = {
     'chat.providerHint': '切换使用哪一个对话后端。密钥和设置都可以保存在下面各项里。',
     'chat.openaiKey': 'OpenAI API 密钥',
     'chat.geminiKey': 'Gemini API 密钥',
-    'chat.xaiKey': 'xAI Grok Voice API 密钥',
+    'chat.xaiKey': '已发布的 xAI Agent：请通过 Wi-Fi 设置令牌服务',
     'chat.ph.xai': 'xai-…（不修改请留空）',
     'w.xai': 'xAI 密钥写入完成',
     'chat.xzUrl': 'XiaoZhi 服务器 URL',
@@ -1827,8 +1827,8 @@ function initLangSwitch() {
       <label for="gemini-apikey" data-i18n="chat.geminiKey">Gemini API key</label>
       <input type="password" id="gemini-apikey" maxlength="256" placeholder="AIza… (leave blank to keep)" data-i18n-placeholder="chat.ph.gemini">
 
-      <label for="xai-apikey" data-i18n="chat.xaiKey">xAI Grok Voice API key</label>
-      <input type="password" id="xai-apikey" maxlength="256" placeholder="xai-… (leave blank to keep)" data-i18n-placeholder="chat.ph.xai">
+      <label for="xai-apikey" data-i18n="chat.xaiKey">Saved xAI Agent: use Wi-Fi token-service settings</label>
+      <input type="password" id="xai-apikey" disabled placeholder="Saved Agent: configure token service in Wi-Fi settings">
 
       <label for="xiaozhi-url" data-i18n="chat.xzUrl">XiaoZhi server URL</label>
       <input type="text" id="xiaozhi-url" maxlength="256" placeholder="ws://192.168.1.10:8000/xiaozhi/v1/ (leave blank to keep)" data-i18n-placeholder="chat.ph.xzUrl">
@@ -3943,7 +3943,6 @@ document.getElementById('btn-apply').addEventListener('click', async () => {
   const pass = document.getElementById('password').value;
   const key  = document.getElementById('apikey').value.trim();
   const gkey = document.getElementById('gemini-apikey').value.trim();
-  const xaiKey = document.getElementById('xai-apikey').value.trim();
   const xzUrl = document.getElementById('xiaozhi-url').value.trim();
   const xzToken = document.getElementById('xiaozhi-token').value.trim();
 
@@ -3969,10 +3968,6 @@ document.getElementById('btn-apply').addEventListener('click', async () => {
     if (gkey && chrGeminiKey) {
       await writeEncrypted(chrGeminiKey, strToBytes(gkey));
       log(t('w.gemini'), 'ok');
-    }
-    if (xaiKey && chrXaiKey) {
-      await writeEncrypted(chrXaiKey, strToBytes(xaiKey));
-      log(t('w.xai'), 'ok');
     }
     if (xzUrl && chrXiaozhiUrl) {
       await writeEncrypted(chrXiaozhiUrl, strToBytes(xzUrl));

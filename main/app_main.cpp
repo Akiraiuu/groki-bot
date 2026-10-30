@@ -370,6 +370,11 @@ extern "C" void app_main()
         // audio playback, which drops BLE RX throughput from ~22 KiB/s
         // to ~10 KiB/s and turns BLE audio streaming choppy.
         spk.task_pinned_core = 1;
+        if (board.kind() == stackchan::board::BoardKind::StopWatch &&
+            cfg.provider == stackchan::config::Provider::Grok) {
+            // Match the saved-Agent PCM clock instead of resampling 24 -> 44.1 kHz.
+            spk.sample_rate = 24000;
+        }
         // Per-board / per-path software gain (see BoardProfile + the Module
         // Audio override above). 0 = keep M5Unified's factory value.
         if (profile.speaker_magnification != 0) {
@@ -430,6 +435,13 @@ extern "C" void app_main()
         auto mic = M5.Mic.config();
         mic.task_priority = 6;
         mic.task_pinned_core = 1;
+        if (board.kind() == stackchan::board::BoardKind::StopWatch &&
+            cfg.provider == stackchan::config::Provider::Grok) {
+            // The ES8311 callback already selects maximum ADC digital gain.
+            // Leave 12 dB more software headroom than the library default (16).
+            mic.magnification = 4;
+            ESP_LOGI(kTag, "StopWatch Grok audio: mic magnification=4, speaker clock=24000");
+        }
         M5.Mic.config(mic);
         M5.Mic.end();
     }
@@ -591,6 +603,7 @@ extern "C" void app_main()
                                  std::memory_order_relaxed);
     g_state->mic_lip.agc_enabled.store(cfg.mic_lip_agc_enabled,
                                        std::memory_order_relaxed);
+    g_state->face.fixed_gaze_enabled.store(cfg.fixed_gaze_enabled, std::memory_order_relaxed);
     g_state->barge_in_enabled.store(cfg.barge_in_enabled,
                                     std::memory_order_relaxed);
     stackchan::app::settings_sinks::register_ble_sinks(
@@ -779,8 +792,8 @@ extern "C" void app_main()
         ESP_LOGI(kTag, "provider=Gemini Live, key=%s",
                  api_key[0] ? "set" : "empty");
     } else if (cfg.provider == stackchan::config::Provider::Grok) {
-        api_key = cfg.xai_api_key.c_str();
-        ESP_LOGI(kTag, "provider=Grok Voice, key=%s", api_key[0] ? "set" : "empty");
+        ESP_LOGI(kTag, "provider=Saved xAI Agent, broker=%s",
+                 cfg.xai_device_token.empty() ? "unconfigured" : "configured");
     } else if (cfg.provider == stackchan::config::Provider::XiaoZhi) {
         // XiaoZhi is keyed by its server URL; the token is optional.
         xiaozhi_url = cfg.xiaozhi_url.c_str();
@@ -803,6 +816,8 @@ extern "C" void app_main()
         .xiaozhi_url = xiaozhi_url, .xiaozhi_token = xiaozhi_token,
         .system_prompt = cfg.system_prompt.c_str(),
         .extra_headers = cfg.conv_extra_headers.c_str(),
+        .xai_token_url = cfg.xai_token_url.c_str(),
+        .xai_device_token = cfg.xai_device_token.c_str(),
         .seg_buf = g_conv_seg_buf};
 #else
     (void)api_key; (void)xiaozhi_url; (void)xiaozhi_token;
@@ -879,7 +894,11 @@ extern "C" void app_main()
     // (no-PSRAM) slim profile drops the whole TLS / WebSocket / assistant
     // PCM ring stack at compile time.
 #if CONFIG_STACKCHAN_CONVERSATION_ENABLED
-    if (!espnow_mode) {
+    // Paid sessions must not begin merely because Wi-Fi, boot or OTA completed.
+    // The Grok coordinator starts offline and waits for a RAM-only, explicitly
+    // confirmed local test request; starting its task does not connect to xAI.
+    if (!espnow_mode && cfg.openai_enabled &&
+               cfg.operation_mode == stackchan::config::OperationMode::Conversation) {
         stackchan::app::start_conversation_task(*g_conversation_args);
     }
 #else

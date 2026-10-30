@@ -16,7 +16,7 @@ idf_component_register(
         "voice_fetch.cpp"
     INCLUDE_DIRS "include"
     PRIV_INCLUDE_DIRS "."
-    REQUIRES tl_expected config_service avatar_vm esp_http_server
+    REQUIRES tl_expected config_service avatar_vm esp_http_server conversation
     PRIV_REQUIRES
         esp_https_ota
         esp_app_format

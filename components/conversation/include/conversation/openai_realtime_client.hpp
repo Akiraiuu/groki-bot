@@ -33,6 +33,7 @@ public:
     tl::expected<void, ConversationError> submit_tool_result(std::string_view call_id,
                                                              std::string_view output_json) override;
     tl::expected<void, ConversationError> cancel_response() override;
+    tl::expected<void, ConversationError> begin_input_turn() override;
     ConversationState state() const override;
     std::uint32_t tx_evicted_chunks() const override;
 

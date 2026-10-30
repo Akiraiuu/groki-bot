@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "avatar/expression.hpp"
+#include "conversation/local_wake_status.hpp"
 
 namespace stackchan::app {
 
@@ -73,6 +74,11 @@ class SharedState {
 public:
     using BalloonCompletionCallback = std::function<void()>;
 
+    // RAM-only opt-in. Every reboot and completed paid interaction disables it.
+    // PCM stays on-device; recognition never authorizes the network transport.
+    using LocalWakeState = conversation::LocalWakeStatus;
+    LocalWakeState& local_wake{conversation::local_wake_status};
+
     // --- Avatar face (render_task reads every frame) -----------------------
     struct Face {
         std::atomic<float> mouth_open{0.0f};
@@ -100,6 +106,8 @@ public:
         // 0 = no commanded gaze, animator runs alone.
         std::atomic<float> gaze_target_h{0.0f};
         std::atomic<float> gaze_target_v{0.0f};
+        // Local appearance preference. Never starts microphone or conversation.
+        std::atomic<bool> fixed_gaze_enabled{true};
     };
     Face face;
 

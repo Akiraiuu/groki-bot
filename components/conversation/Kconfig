@@ -32,6 +32,7 @@ menu "Stackchan Conversation"
             Maximum size of a single reassembled WebSocket text frame. Frames
             larger than this are dropped. OpenAI response.audio.delta frames
             can exceed 40 KB, so this needs generous headroom. Allocated from
-            PSRAM.
+            PSRAM. Saved xAI Agent sessions treat this as the initial size and
+            may grow it on demand up to 1 MiB including the trailing NUL.
 
 endmenu

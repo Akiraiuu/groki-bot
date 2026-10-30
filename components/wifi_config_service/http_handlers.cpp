@@ -1662,7 +1662,7 @@ esp_err_t handle_paid_voice_status(httpd_req_t* req)
     const auto& w = conversation::local_wake_status;
     char body[1400];
     std::snprintf(body, sizeof(body),
-        "{\"phase\":\"%s\",\"reason\":\"%s\",\"available\":%s,\"remaining_ms\":%lld,\"max_rounds\":%u,\"max_seconds\":60,\"completed_rounds\":%u,\"idle_timeout_ms\":%lld,\"idle_remaining_ms\":%lld,\"approval_id\":%u,\"mode\":\"%s\",\"input_ready\":%s,\"local_record_seconds\":5,\"local_max_seconds\":15,"
+        "{\"phase\":\"%s\",\"reason\":\"%s\",\"available\":%s,\"remaining_ms\":%lld,\"max_rounds\":%u,\"max_seconds\":60,\"completed_rounds\":%u,\"idle_timeout_ms\":%lld,\"idle_remaining_ms\":%lld,\"approval_id\":%u,\"mode\":\"%s\",\"input_ready\":%s,\"fault_source\":\"%s\",\"fault_detail\":%d,\"local_record_seconds\":5,\"local_max_seconds\":15,"
         "\"local_wake\":{\"enabled\":%s,\"check_only\":%s,\"state\":%d,\"stage\":%d,\"error\":%d,\"microphone_active\":%s,\"worker_active\":%s,\"remaining_ms\":%u,\"previous_stage\":%u,\"reset_reason\":%d,\"internal_free\":%u,\"psram_free\":%u,\"stack_free\":%u,"
         "\"frames\":%u,\"samples_per_frame\":%u,\"peak\":%u,\"mean_abs_peak\":%u,\"clipped_samples\":%u,\"timeouts\":%u,\"rejected\":%u,\"detect_max_us\":%u,\"last_command\":%d,\"best_target_per_mille\":%u,\"best_other_per_mille\":%u}}",
         phases[static_cast<int>(s.phase)], reasons[static_cast<int>(s.reason)], s.available ? "true" : "false",
@@ -1670,6 +1670,7 @@ esp_err_t handle_paid_voice_status(httpd_req_t* req)
         static_cast<long long>(s.idle_timeout_ms), static_cast<long long>(s.idle_remaining_ms), static_cast<unsigned>(s.approval_id),
         s.mode == conversation::PaidVoiceTest::Mode::Local ? "local" : "paid",
         s.input_ready ? "true" : "false",
+        conversation::PaidVoiceTest::fault_name(s.fault), s.fault_detail,
         w.enabled.load() ? "true" : "false", w.check_only.load() ? "true" : "false",
         w.status.load(), static_cast<int>(w.stage.load()), static_cast<int>(w.error.load()),
         w.microphone_active.load() ? "true" : "false", w.worker_active.load() ? "true" : "false",

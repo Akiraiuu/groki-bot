@@ -16,6 +16,26 @@ public:
     enum class Profile { SingleReply, Dialogue };
     enum class Phase { Idle, Queued, Running, Stopping };
     enum class Reason { None, Completed, Cancelled, Timeout, Error, Interrupted, IdleTimeout, Farewell, RoundLimit };
+    enum class Fault { None, Unspecified, Unavailable, UnexpectedReply, LocalCapture, LocalPlayback,
+                       WakeRelease, Connect, Recovery, AudioUpload, Microphone, InputTurnReset, ConversationEvent };
+    static const char* fault_name(Fault fault) {
+        switch (fault) {
+        case Fault::None: return "none";
+        case Fault::Unspecified: return "unspecified";
+        case Fault::Unavailable: return "unavailable";
+        case Fault::UnexpectedReply: return "unexpected_reply";
+        case Fault::LocalCapture: return "local_capture";
+        case Fault::LocalPlayback: return "local_playback";
+        case Fault::WakeRelease: return "wake_release";
+        case Fault::Connect: return "connect";
+        case Fault::Recovery: return "recovery";
+        case Fault::AudioUpload: return "audio_upload";
+        case Fault::Microphone: return "microphone";
+        case Fault::InputTurnReset: return "input_turn_reset";
+        case Fault::ConversationEvent: return "conversation_event";
+        }
+        return "unspecified";
+    }
     struct Snapshot {
         Phase phase;
         Reason reason;
@@ -26,13 +46,15 @@ public:
         bool input_ready;
         std::uint32_t max_rounds, completed_rounds;
         std::int64_t idle_timeout_ms, idle_remaining_ms;
+        Fault fault;
+        int fault_detail; // ConversationError enum 0..7 only, -1 when unavailable.
     };
     void set_available(bool value, std::uint32_t seed = 1) {
         std::lock_guard lock{mutex_};
         available_ = value;
         input_ready_ = false;
         if (value) approval_id_ = seed ? seed : 1;
-        if (!value && phase_ != Phase::Idle) stop_locked(Reason::Error);
+        if (!value && phase_ != Phase::Idle) stop_locked(Reason::Error, Fault::Unavailable);
     }
     bool request_start(bool confirmed, std::int64_t now, std::uint32_t approval_id,
                        Mode mode = Mode::Paid, Profile profile = Profile::SingleReply) {
@@ -47,6 +69,8 @@ public:
         mode_ = mode;
         profile_ = profile;
         completed_rounds_ = 0;
+        fault_ = Fault::None;
+        fault_detail_ = -1;
         input_ready_ = reply_pending_ = false;
         waiting_since_ = -1;
         deadline_ = now + (mode == Mode::Paid ? limit_ms : local_limit_ms);
@@ -95,7 +119,7 @@ public:
         expire_locked(now);
         if (!current_paid_locked(now, expected_approval)) return false;
         if (profile_ == Profile::Dialogue && !reply_pending_) {
-            stop_locked(Reason::Error); // Do not silently continue an unsolicited/duplicate reply.
+            stop_locked(Reason::Error, Fault::UnexpectedReply); // Do not silently continue an unsolicited/duplicate reply.
             return false;
         }
         ++completed_rounds_;
@@ -107,10 +131,10 @@ public:
         }
         return true;
     }
-    void request_stop(Reason why = Reason::Cancelled) {
+    void request_stop(Reason why = Reason::Cancelled, Fault fault = Fault::Unspecified, int detail = -1) {
         std::lock_guard lock{mutex_};
         next_approval_locked(); // Also invalidates delayed starts while idle.
-        stop_locked(why);
+        stop_locked(why, fault, detail);
     }
     void finish() {
         std::lock_guard lock{mutex_};
@@ -127,7 +151,7 @@ public:
             ? dialogue_idle_ms - (now - waiting_since_) : 0;
         return {phase_, reason_, available_, deadline_ > now ? deadline_ - now : 0, approval_id_, mode_,
                 input_ready_ && running, max_rounds_locked(), completed_rounds_,
-                profile_ == Profile::Dialogue ? dialogue_idle_ms : 0, idle_left > 0 ? idle_left : 0};
+                profile_ == Profile::Dialogue ? dialogue_idle_ms : 0, idle_left > 0 ? idle_left : 0, fault_, fault_detail_};
     }
 private:
     bool current_paid_locked(std::int64_t now, std::uint32_t expected) const {
@@ -136,10 +160,14 @@ private:
     }
     std::uint32_t max_rounds_locked() const { return profile_ == Profile::Dialogue ? dialogue_max_rounds : 1; }
     void next_approval_locked() { if (++approval_id_ == 0) ++approval_id_; }
-    void stop_locked(Reason why) {
+    void stop_locked(Reason why, Fault fault = Fault::Unspecified, int detail = -1) {
         input_ready_ = reply_pending_ = false;
         waiting_since_ = -1;
         if (phase_ == Phase::Queued || phase_ == Phase::Running) {
+            if (why == Reason::Error) {
+                fault_ = fault == Fault::None ? Fault::Unspecified : fault;
+                fault_detail_ = fault == Fault::ConversationEvent && detail >= 0 && detail <= 7 ? detail : -1;
+            }
             phase_ = Phase::Stopping;
             reason_ = why;
         }
@@ -153,6 +181,8 @@ private:
     std::mutex mutex_;
     Phase phase_{Phase::Idle};
     Reason reason_{Reason::None};
+    Fault fault_{Fault::None};
+    int fault_detail_{-1};
     Mode mode_{Mode::Paid};
     Profile profile_{Profile::SingleReply};
     bool available_{false}, input_ready_{false}, reply_pending_{false};

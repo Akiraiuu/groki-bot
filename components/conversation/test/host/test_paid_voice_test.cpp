@@ -168,8 +168,63 @@ static void test_bounded_dialogue()
     assert(!is_farewell(std::string(129, 'x')));
 }
 
+
+// Diagnostic metadata must survive teardown without keeping any paid permission.
+// Detail is a bounded enum, never arbitrary server text.
+static void test_failure_diagnostics()
+{
+    using Fault = PaidVoiceTest::Fault;
+    PaidVoiceTest p;
+    p.set_available(true);
+    assert(p.snapshot(0).fault == Fault::None);
+    assert(p.snapshot(0).fault_detail == -1);
+    const std::array faults{Fault::Unspecified, Fault::Unavailable, Fault::UnexpectedReply,
+        Fault::LocalCapture, Fault::LocalPlayback, Fault::WakeRelease, Fault::Connect,
+        Fault::Recovery, Fault::AudioUpload, Fault::Microphone, Fault::InputTurnReset,
+        Fault::ConversationEvent};
+    for (const auto fault : faults) {
+        assert(p.request_start(true, 100, p.snapshot(100).approval_id));
+        assert(p.claim(101));
+        const auto id = p.snapshot(101).approval_id;
+        p.request_stop(Reason::Error, fault, 4);
+        assert(!p.permitted(102, id));
+        assert(p.snapshot(102).fault == fault);
+        assert(p.snapshot(102).fault_detail == (fault == Fault::ConversationEvent ? 4 : -1));
+        p.request_stop(Reason::Error, Fault::Connect);
+        p.request_stop(Reason::Cancelled);
+        p.finish();
+        assert(p.snapshot(103).phase == Phase::Idle);
+        assert(p.snapshot(103).reason == Reason::Error);
+        assert(p.snapshot(103).fault == fault); // First cause survives STOP/finish.
+        assert(p.snapshot(103).fault_detail == (fault == Fault::ConversationEvent ? 4 : -1));
+    }
+    assert(p.request_start(true, 200, p.snapshot(200).approval_id));
+    assert(p.snapshot(201).fault == Fault::None); // Only a new explicit grant clears it.
+    assert(p.snapshot(201).fault_detail == -1);
+    p.request_stop(Reason::Cancelled, Fault::ConversationEvent, 4);
+    p.finish();
+    assert(p.snapshot(202).fault == Fault::None); // Non-error does not invent a failure.
+    for (const auto detail : {-100, -1, 0, 7, 8, 100}) {
+        assert(p.request_start(true, 300, p.snapshot(300).approval_id));
+        assert(p.claim(301));
+        p.request_stop(Reason::Error, Fault::ConversationEvent, detail);
+        assert(p.snapshot(302).fault_detail == (detail >= 0 && detail <= 7 ? detail : -1));
+        p.finish();
+    }
+    assert(p.request_start(true, 400, p.snapshot(400).approval_id,
+        PaidVoiceTest::Mode::Paid, PaidVoiceTest::Profile::Dialogue));
+    assert(p.claim(401));
+    assert(!p.reply_completed(402, p.snapshot(402).approval_id));
+    assert(p.snapshot(403).fault == Fault::UnexpectedReply);
+    p.finish();
+    assert(p.request_start(true, 500, p.snapshot(500).approval_id));
+    p.set_available(false);
+    assert(p.snapshot(501).fault == Fault::Unavailable);
+}
+
 int main()
 {
+    test_failure_diagnostics();
     test_bounded_dialogue();
     test_wifi_input_readiness();
     SingleTurnInput input;

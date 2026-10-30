@@ -374,7 +374,7 @@ private:
             vTaskDelay(kI2sSettle);
             if (!allowed()) return;
             if (!M5.Mic.record(assistant_pcm_.data(), total, rate, /*stereo=*/false)) {
-                conv::paid_voice_test.request_stop(Test::Reason::Error);
+                conv::paid_voice_test.request_stop(Test::Reason::Error, Test::Fault::LocalCapture);
                 return;
             }
             // Capture while the ADC settles; replay only the following 5 s.
@@ -399,7 +399,7 @@ private:
             if (!allowed()) return;
             // Fail closed on a driver that returns before filling the buffer.
             if (recorded_us < 7'500'000) {
-                conv::paid_voice_test.request_stop(Test::Reason::Error);
+                conv::paid_voice_test.request_stop(Test::Reason::Error, Test::Fault::LocalCapture);
                 return;
             }
             std::uint64_t sum = 0;
@@ -421,7 +421,7 @@ private:
                     const auto count = std::min(kSegmentSamples, total - pos);
                     std::memcpy(seg_buf_[next], assistant_pcm_.data() + pos, count * sizeof(std::int16_t));
                     if (!M5.Speaker.playRaw(seg_buf_[next], count, rate, false, 1, kSpeakerChannel, false)) {
-                        conv::paid_voice_test.request_stop(Test::Reason::Error);
+                        conv::paid_voice_test.request_stop(Test::Reason::Error, Test::Fault::LocalPlayback);
                         return;
                     }
                     pos += count;
@@ -534,7 +534,7 @@ private:
             if (conv::paid_voice_test.claim(esp_timer_get_time() / 1000, Test::Mode::Local)) {
                 state_.local_wake.enabled.store(false);
                 // Queued requests reached here only after release_wake above.
-                if (!release_wake()) { conv::paid_voice_test.request_stop(Test::Reason::Error); continue; }
+                if (!release_wake()) { conv::paid_voice_test.request_stop(Test::Reason::Error, Test::Fault::WakeRelease); continue; }
                 conv::wake_confirmation.cancel();
                 run_local_record_playback();
                 continue;
@@ -549,7 +549,7 @@ private:
             // local resources first. Its original 60s deadline is never extended.
             state_.local_wake.enabled.store(false);
             state_.local_wake.status.store(SharedState::LocalWakeState::Off);
-            if (!release_wake()) { conv::paid_voice_test.request_stop(Test::Reason::Error); continue; }
+            if (!release_wake()) { conv::paid_voice_test.request_stop(Test::Reason::Error, Test::Fault::WakeRelease); continue; }
             conv::wake_confirmation.cancel();
             paid_input_.reset();
             paid_reply_done_ = false;
@@ -560,7 +560,7 @@ private:
             while (!wifi_is_connected() && conv::paid_voice_test.permitted(esp_timer_get_time() / 1000))
                 vTaskDelay(pdMS_TO_TICKS(50));
             if (conv::paid_voice_test.permitted(esp_timer_get_time() / 1000) && !connect())
-                conv::paid_voice_test.request_stop(Test::Reason::Error);
+                conv::paid_voice_test.request_stop(Test::Reason::Error, Test::Fault::Connect);
             while (conv::paid_voice_test.permitted(esp_timer_get_time() / 1000)) {
                 if (!wifi_is_connected() || state_.audio_stream_active.load(std::memory_order_acquire)) {
                     conv::paid_voice_test.request_stop(Test::Reason::Interrupted);
@@ -775,7 +775,7 @@ private:
     void recover_after_error(bool from_failure = true)
     {
         if (provider_ == config::Provider::Grok) {
-            conv::paid_voice_test.request_stop(conv::PaidVoiceTest::Reason::Error);
+            conv::paid_voice_test.request_stop(conv::PaidVoiceTest::Reason::Error, conv::PaidVoiceTest::Fault::Recovery);
             return;
         }
         if (from_failure) {
@@ -1080,7 +1080,7 @@ private:
                 if (!pushed) {
                     ++mic_window_send_errors_;
                     publish_input_ready(false);
-                    conv::paid_voice_test.request_stop(conv::PaidVoiceTest::Reason::Error);
+                    conv::paid_voice_test.request_stop(conv::PaidVoiceTest::Reason::Error, conv::PaidVoiceTest::Fault::AudioUpload);
                     return;
                 }
                 for (const auto sample : buf) {
@@ -1108,7 +1108,7 @@ private:
                 if (!recorded) {
                     ++mic_window_record_errors_;
                     publish_input_ready(false);
-                    conv::paid_voice_test.request_stop(conv::PaidVoiceTest::Reason::Error);
+                    conv::paid_voice_test.request_stop(conv::PaidVoiceTest::Reason::Error, conv::PaidVoiceTest::Fault::Microphone);
                     return;
                 }
                 const bool ready = pushed && mic_settle_samples_ == 0 && paid_input_.open();
@@ -1154,7 +1154,7 @@ private:
         const bool second_recorded = M5.Mic.record(mic_buf_[1].data(), mic_buf_[1].size(), mic_sample_rate_, /*stereo=*/false);
         if (provider_ == config::Provider::Grok && (!first_recorded || !second_recorded)) {
             M5.Mic.end();
-            conv::paid_voice_test.request_stop(conv::PaidVoiceTest::Reason::Error);
+            conv::paid_voice_test.request_stop(conv::PaidVoiceTest::Reason::Error, conv::PaidVoiceTest::Fault::Microphone);
             return;
         }
         mic_read_ = 0;
@@ -1213,7 +1213,7 @@ private:
     {
         if (!conv::paid_voice_test.reply_completed(esp_timer_get_time() / 1000, paid_session_id_)) return;
         if (!client_->begin_input_turn()) {
-            conv::paid_voice_test.request_stop(conv::PaidVoiceTest::Reason::Error);
+            conv::paid_voice_test.request_stop(conv::PaidVoiceTest::Reason::Error, conv::PaidVoiceTest::Fault::InputTurnReset);
             return;
         }
         paid_input_.reset();
@@ -1460,7 +1460,7 @@ private:
 
         case conv::ConversationEventType::Error: {
             if (provider_ == config::Provider::Grok) {
-                conv::paid_voice_test.request_stop(conv::PaidVoiceTest::Reason::Error);
+                conv::paid_voice_test.request_stop(conv::PaidVoiceTest::Reason::Error, conv::PaidVoiceTest::Fault::ConversationEvent, ev.error ? static_cast<int>(*ev.error) : -1);
                 break;
             }
             // Transport errors (disconnect / handshake) are fatal — the

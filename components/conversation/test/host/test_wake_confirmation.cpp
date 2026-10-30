@@ -62,4 +62,21 @@ int main() {
     assert(w.offer(110000, p));
     p.set_available(false);
     assert(!w.confirm(110001, w.snapshot(110001).id, p));
+    // The scope shown by the current prompt is exactly the scope granted.
+    PaidVoiceTest dialogue;
+    WakeConfirmation prompt;
+    dialogue.set_available(true, 1234);
+    assert(prompt.offer(0, dialogue, PaidVoiceTest::Profile::Dialogue));
+    auto scope = prompt.snapshot(1);
+    assert(scope.max_rounds == 3 && scope.idle_timeout_ms == 10000);
+    assert(!dialogue.permitted(1) && !dialogue.claim(1));
+    assert(!prompt.confirm(2, scope.id + 1, dialogue));
+    assert(prompt.confirm(3, scope.id, dialogue));
+    assert(!prompt.confirm(4, scope.id, dialogue));
+    assert(dialogue.snapshot(4).max_rounds == 3);
+    assert(dialogue.snapshot(4).remaining_ms == 59999);
+    assert(dialogue.claim(5));
+    dialogue.request_stop();
+    dialogue.finish();
+
 }

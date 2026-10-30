@@ -75,6 +75,7 @@ constexpr std::size_t kAudioTxQueueLen = 96;
 // flexible array avoids a second heap allocation per chunk.
 struct AudioChunk {
     std::uint16_t len_bytes;
+    std::uint32_t input_epoch;
     std::uint8_t data[];  // [len_bytes] G.711 µ-law samples
 };
 
@@ -141,8 +142,10 @@ public:
         server_web_ = server_x_ = server_file_ = false;
         custom_tool_names_.clear();
         response_active_.store(false, std::memory_order_relaxed);
+        response_completed_.store(false, std::memory_order_release);
         discard_response_.store(false, std::memory_order_relaxed);
         input_finished_.store(false, std::memory_order_release);
+        input_epoch_.store(1, std::memory_order_release);
         fn_args_.clear();
         output_is_ulaw_ = (config_.output_sample_rate_hz == kG711SampleRate);
         tx_evicted_total_.store(0, std::memory_order_relaxed);
@@ -277,6 +280,7 @@ public:
             return tl::unexpected{ConversationError::OutOfMemory};
         }
         chunk->len_bytes = static_cast<std::uint16_t>(wire_bytes);
+        chunk->input_epoch = input_epoch_.load(std::memory_order_acquire);
         if (raw_pcm) std::memcpy(chunk->data, pcm.data(), wire_bytes);
         else for (std::size_t i = 0; i < pcm.size(); ++i) {
             chunk->data[i] = pcm16_to_ulaw(pcm[i]);
@@ -359,6 +363,27 @@ public:
         // push_audio is accepted again immediately.
         pending_tool_call_ = false;
         set_state(ConversationState::Listening);
+        return {};
+    }
+
+    tl::expected<void, ConversationError> begin_input_turn()
+    {
+        std::lock_guard lock{send_mutex_};
+        if (config_.agent_id.empty() || !config_.allow_multiple_turns || !session_permitted() ||
+            client_ == nullptr || audio_tx_queue_ == nullptr || sender_should_exit_.load(std::memory_order_acquire) ||
+            !esp_websocket_client_is_connected(client_) || response_active_.load(std::memory_order_acquire) ||
+            !response_completed_.load(std::memory_order_acquire) ||
+            !input_finished_.load(std::memory_order_acquire) ||
+            state_.load(std::memory_order_relaxed) == ConversationState::Error)
+            return tl::unexpected{ConversationError::InvalidState};
+        // Old queued AND already-dequeued chunks are invalidated before input reopens.
+        response_completed_.store(false, std::memory_order_release);
+        input_epoch_.fetch_add(1, std::memory_order_acq_rel);
+        AudioChunk* old = nullptr;
+        while (xQueueReceive(audio_tx_queue_, &old, 0) == pdTRUE) {
+            if (old != nullptr) heap_caps_free(old);
+        }
+        input_finished_.store(false, std::memory_order_release);
         return {};
     }
 
@@ -472,7 +497,8 @@ private:
     // teardown will flush whatever is left in the queue.
     void send_one_chunk(AudioChunk* chunk)
     {
-        if (input_finished_.load(std::memory_order_acquire)) return;
+        if (input_finished_.load(std::memory_order_acquire) ||
+            chunk->input_epoch != input_epoch_.load(std::memory_order_acquire)) return;
         if (!session_permitted()) return;
         if (client_ == nullptr) return;
         if (!esp_websocket_client_is_connected(client_)) return;
@@ -501,7 +527,8 @@ private:
         int send_rc;
         {
             std::lock_guard lock{send_mutex_};
-            if (!session_permitted() || input_finished_.load(std::memory_order_acquire)) return;
+            if (!session_permitted() || input_finished_.load(std::memory_order_acquire) ||
+                chunk->input_epoch != input_epoch_.load(std::memory_order_acquire)) return;
             send_rc = esp_websocket_client_send_text(client_, json_scratch_.data(), n, kSendTimeout);
         }
         const std::uint32_t dt =
@@ -753,6 +780,7 @@ private:
         } else if (std::strcmp(type, "response.created") == 0) {
             discard_response_.store(false, std::memory_order_relaxed);
             fn_args_.clear();
+            response_completed_.store(false, std::memory_order_release);
             response_active_.store(true, std::memory_order_relaxed);
         } else if (std::strcmp(type, "response.output_audio.delta") == 0 ||
                    std::strcmp(type, "response.audio.delta") == 0) { // GA / beta names
@@ -799,6 +827,7 @@ private:
                     return;
                 }
             }
+            response_completed_.store(true, std::memory_order_release);
             emit_simple(ConversationEventType::ResponseDone);
             if (!pending_tool_call_) {
                 set_state(ConversationState::Listening);
@@ -950,7 +979,9 @@ private:
     bool pending_tool_call_{false};
     bool output_is_ulaw_{false};            // wire codec for assistant audio (g711_ulaw vs pcm16)
     std::atomic<bool> response_active_{false}; // a response is mid-generation (set/cleared from the WS task)
-    std::atomic<bool> input_finished_{false}; // saved-Agent final recognized input; reset only by start()
+    std::atomic<bool> response_completed_{false};
+    std::atomic<bool> input_finished_{false}; // Closed at each final transcript.
+    std::atomic<std::uint32_t> input_epoch_{1}; // Reject stale audio across explicit turn rearming.
 
     // RX frame reassembly (PSRAM).
     char* rx_buffer_{nullptr};
@@ -1032,6 +1063,11 @@ tl::expected<void, ConversationError> OpenAiRealtimeClient::submit_tool_result(s
 tl::expected<void, ConversationError> OpenAiRealtimeClient::cancel_response()
 {
     return impl_->cancel_response();
+}
+
+tl::expected<void, ConversationError> OpenAiRealtimeClient::begin_input_turn()
+{
+    return impl_->begin_input_turn();
 }
 
 ConversationState OpenAiRealtimeClient::state() const

@@ -6,6 +6,7 @@
 #include "conversation/paid_voice_test.hpp"
 #include "conversation/paid_voice_command.hpp"
 #include "conversation/single_turn_input.hpp"
+#include "conversation/farewell.hpp"
 
 using namespace stackchan::conversation;
 using Phase = PaidVoiceTest::Phase;
@@ -81,8 +82,95 @@ static void test_wifi_input_readiness()
     assert(!rebooted.snapshot(3).input_ready);
 }
 
+
+static void test_bounded_dialogue()
+{
+    using Profile = PaidVoiceTest::Profile;
+    auto start_dialogue = [](PaidVoiceTest& p, std::int64_t now) {
+        return p.request_start(true, now, p.snapshot(now).approval_id, PaidVoiceTest::Mode::Paid, Profile::Dialogue);
+    };
+    PaidVoiceTest idle;
+    idle.set_available(true, 200);
+    assert(start_dialogue(idle, 0) && idle.claim(1));
+    auto id = idle.snapshot(1).approval_id;
+    assert(idle.permitted(20000)); // Setup itself does not consume the idle wait.
+    assert(idle.update_input_ready(20000, id, true));
+    assert(idle.snapshot(20000).max_rounds == 3 && idle.snapshot(20000).idle_remaining_ms == 10000);
+    assert(idle.update_input_ready(25000, id, true)); // Repeated audio updates cannot extend silence.
+    assert(idle.snapshot(29999).idle_remaining_ms == 1);
+    assert(!idle.permitted(30000));
+    assert(idle.snapshot(30000).reason == Reason::IdleTimeout && !idle.snapshot(30000).input_ready);
+    assert(!idle.note_user_activity(30000, id));
+    idle.request_stop(Reason::Timeout); // Cleanup retains the specific end reason.
+    assert(idle.snapshot(30001).reason == Reason::IdleTimeout);
+    idle.finish();
+
+    PaidVoiceTest turns;
+    turns.set_available(true, 300);
+    assert(start_dialogue(turns, 0) && turns.claim(1));
+    id = turns.snapshot(1).approval_id;
+    for (int round = 1; round <= 3; ++round) {
+        const auto ready = round * 1000;
+        assert(turns.update_input_ready(ready, id, true));
+        assert(turns.note_user_activity(ready + 1, id));
+        assert(turns.update_input_ready(ready + 2, id, false));
+        assert(turns.snapshot(ready + 2).idle_remaining_ms == 0);
+        assert(turns.reply_completed(ready + 500, id) == (round < 3));
+        const auto snap = turns.snapshot(ready + 500);
+        assert(snap.completed_rounds == static_cast<unsigned>(round));
+        assert(snap.remaining_ms == 60000 - ready - 500); // Same original deadline.
+        assert(!snap.input_ready);
+    }
+    assert(turns.snapshot(4000).reason == Reason::RoundLimit && !turns.permitted(4000));
+    assert(!turns.reply_completed(4001, id));
+    turns.finish();
+
+    PaidVoiceTest busy;
+    busy.set_available(true, 400);
+    assert(start_dialogue(busy, 0) && busy.claim(1));
+    id = busy.snapshot(1).approval_id;
+    assert(busy.update_input_ready(10, id, true) && busy.note_user_activity(20, id));
+    assert(busy.permitted(50000)); // User speech and assistant work are not idle waiting.
+    assert(busy.reply_completed(50001, id));
+    assert(busy.update_input_ready(50002, id, true));
+    assert(busy.snapshot(59999).idle_remaining_ms == 3);
+    assert(!busy.permitted(60000)); // Hard cap always wins; no per-turn extension.
+    assert(busy.snapshot(60000).reason == Reason::Timeout);
+    busy.finish();
+
+    PaidVoiceTest ending;
+    ending.set_available(true, 500);
+    assert(start_dialogue(ending, 0) && ending.claim(1));
+    id = ending.snapshot(1).approval_id;
+    assert(ending.update_input_ready(2, id, true));
+    ending.request_stop(Reason::Farewell);
+    assert(!ending.permitted(3) && !ending.snapshot(3).input_ready);
+    assert(ending.snapshot(3).reason == Reason::Farewell);
+    ending.finish();
+    assert(start_dialogue(ending, 100) && ending.claim(101));
+    auto fresh = ending.snapshot(101).approval_id;
+    assert(ending.update_input_ready(102, fresh, true));
+    assert(!ending.note_user_activity(103, id)); // Old speech cannot cancel a new idle deadline.
+    assert(!ending.reply_completed(103, id));
+    assert(ending.snapshot(103).completed_rounds == 0);
+    assert(!ending.reply_completed(104, fresh)); // No unsolicited/duplicate reply may reopen input.
+    assert(ending.snapshot(104).reason == Reason::Error);
+
+    PaidVoiceTest local;
+    local.set_available(true, 1);
+    assert(!local.request_start(true, 0, 1, PaidVoiceTest::Mode::Local, Profile::Dialogue));
+    assert(!local.request_start(false, 0, 1, PaidVoiceTest::Mode::Paid, Profile::Dialogue));
+
+    for (const auto text : {"再见", "拜拜！", "退下吧。", "不用了，谢谢", " 再 见 ", "“再见”", "结束对话", "Bye bye!"})
+        assert(is_farewell(text));
+    for (const auto text : {"", "继续", "再见的意思是什么", "不用了但是请继续", "不是再见", "介绍一下拜拜这个词", "不用", "退下吧的英文怎么说"})
+        assert(!is_farewell(text));
+    assert(!is_farewell(std::string(129, 'x')));
+}
+
 int main()
 {
+    test_bounded_dialogue();
     test_wifi_input_readiness();
     SingleTurnInput input;
     ConversationEvent event{};
@@ -189,6 +277,18 @@ int main()
     };
     assert(command(R"({"op":"start","confirm_paid":true,"max_rounds":1,"max_seconds":60,"approval_id":1})") == PaidVoiceCommand::Start);
     assert(command(R"({"op":"stop"})") == PaidVoiceCommand::Stop);
+
+    assert(command(R"({"op":"start_dialogue","confirm_paid":true,"max_rounds":3,"max_seconds":60,"idle_timeout_seconds":10,"approval_id":1})") == PaidVoiceCommand::StartDialogue);
+    for (const auto bad : {
+        R"({"op":"start_dialogue","confirm_paid":true,"max_rounds":3,"max_seconds":60,"approval_id":1})",
+        R"({"op":"start_dialogue","confirm_paid":true,"max_rounds":1,"max_seconds":60,"idle_timeout_seconds":10,"approval_id":1})",
+        R"({"op":"start_dialogue","confirm_paid":true,"max_rounds":3,"max_seconds":600,"idle_timeout_seconds":10,"approval_id":1})",
+        R"({"op":"start_dialogue","confirm_paid":true,"max_rounds":3,"max_seconds":60,"idle_timeout_seconds":11,"approval_id":1})",
+        R"({"op":"start_dialogue","confirm_paid":true,"max_rounds":3,"max_seconds":60,"idle_timeout_seconds":10,"idle_timeout_seconds":10,"approval_id":1})",
+        R"({"op":"start","confirm_paid":true,"max_rounds":1,"max_seconds":60,"idle_timeout_seconds":10,"approval_id":1})",
+        R"({"op":"start_dialogue","confirm_paid":false,"max_rounds":3,"max_seconds":60,"idle_timeout_seconds":10,"approval_id":1})"})
+        assert(command(bad) == PaidVoiceCommand::Invalid);
+
     assert(command(R"({"op":"record_local","confirm_local_recording":true,"record_seconds":5,"approval_id":1})") == PaidVoiceCommand::LocalRecord);
     for (auto json : {"null", "[]", "{}",
         R"({"op":"record_local","confirm_local_recording":false,"record_seconds":5,"approval_id":1})",

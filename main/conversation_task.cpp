@@ -34,6 +34,7 @@
 #include "conversation/paid_voice_test.hpp"
 #include "conversation/single_turn_input.hpp"
 #include "conversation/wake_confirmation.hpp"
+#include "conversation/farewell.hpp"
 #include "local_wake.hpp"
 #include "conversation/xiaozhi_client.hpp"
 #include "led_runtime.hpp"
@@ -514,7 +515,7 @@ private:
                     if (!release_wake()) continue;
                     if (state_.local_wake.enabled.load() &&
                         !state_.audio_stream_active.load() && !M5.Speaker.isPlaying())
-                        conv::wake_confirmation.offer(esp_timer_get_time() / 1000, conv::paid_voice_test);
+                        conv::wake_confirmation.offer(esp_timer_get_time() / 1000, conv::paid_voice_test, Test::Profile::Dialogue);
                     state_.local_wake.status.store(SharedState::LocalWakeState::Confirming);
                     next_wake_ms = esp_timer_get_time() / 1000 + 2000;
                 } else if (result == LocalWake::Result::Checked || result == LocalWake::Result::Expired) {
@@ -551,8 +552,10 @@ private:
             if (!release_wake()) { conv::paid_voice_test.request_stop(Test::Reason::Error); continue; }
             conv::wake_confirmation.cancel();
             paid_input_.reset();
+            paid_reply_done_ = false;
             paid_session_id_ = conv::paid_voice_test.snapshot(esp_timer_get_time() / 1000).approval_id;
-            state_.set_balloon_text("付费语音测试：1轮，最多60秒", 5000);
+            const auto scope = conv::paid_voice_test.snapshot(esp_timer_get_time() / 1000);
+            state_.set_balloon_text(scope.max_rounds > 1 ? "对话最多3轮，整次60秒，空闲10秒结束" : "付费语音测试：1轮，最多60秒", 5000);
             // Wi-Fi wait consumes the same budget. No token is requested yet.
             while (!wifi_is_connected() && conv::paid_voice_test.permitted(esp_timer_get_time() / 1000))
                 vTaskDelay(pdMS_TO_TICKS(50));
@@ -652,6 +655,7 @@ private:
             if (!conv::paid_voice_test.permitted(esp_timer_get_time() / 1000)) return false;
             const auto test_id = conv::paid_voice_test.snapshot(esp_timer_get_time() / 1000).approval_id;
             cfg.session_permitted = [test_id] { return conv::paid_voice_test.permitted(esp_timer_get_time() / 1000, test_id); };
+            cfg.allow_multiple_turns = conv::paid_voice_test.snapshot(esp_timer_get_time() / 1000).max_rounds > 1;
             cfg.agent_id = std::move(ticket->agent_id);
             // Reconnect always creates a new transport with a freshly issued token.
             client_ = std::make_unique<conv::OpenAiRealtimeClient>(std::move(ticket->token), conv::RealtimeBackend::Xai);
@@ -1020,7 +1024,8 @@ private:
 
         // Done only once every chunk has arrived, every sample has been queued,
         // and the speaker has physically drained.
-        if (audio_complete_ && seg_pos_ >= assistant_pcm_.size() &&
+        if (audio_complete_ && (provider_ != config::Provider::Grok || paid_reply_done_) &&
+            seg_pos_ >= assistant_pcm_.size() &&
             M5.Speaker.isPlaying(kSpeakerChannel) == 0) {
             finish_speaking();
         } else {
@@ -1072,7 +1077,12 @@ private:
             if (provider_ == config::Provider::Grok) {
                 // Numeric-only diagnostics: no recording, transcript or token.
                 ++mic_window_frames_;
-                if (!pushed) ++mic_window_send_errors_;
+                if (!pushed) {
+                    ++mic_window_send_errors_;
+                    publish_input_ready(false);
+                    conv::paid_voice_test.request_stop(conv::PaidVoiceTest::Reason::Error);
+                    return;
+                }
                 for (const auto sample : buf) {
                     const int magnitude = sample < 0 ? -static_cast<int>(sample) : sample;
                     mic_window_peak_ = std::max(mic_window_peak_, magnitude);
@@ -1199,11 +1209,23 @@ private:
         state_.face.mouth_open.store(static_cast<float>(peak) / 32767.0f, std::memory_order_relaxed);
     }
 
+    void continue_paid_dialogue()
+    {
+        if (!conv::paid_voice_test.reply_completed(esp_timer_get_time() / 1000, paid_session_id_)) return;
+        if (!client_->begin_input_turn()) {
+            conv::paid_voice_test.request_stop(conv::PaidVoiceTest::Reason::Error);
+            return;
+        }
+        paid_input_.reset();
+        paid_reply_done_ = false;
+        enter_listening(); // Same nonce and original deadline; no new connection/token.
+    }
+
     void finish_speaking()
     {
         if (provider_ == config::Provider::Grok) {
             log_playback_metrics();
-            conv::paid_voice_test.request_stop(conv::PaidVoiceTest::Reason::Completed);
+            continue_paid_dialogue();
             return;
         }
         M5.Speaker.end();
@@ -1281,7 +1303,19 @@ private:
 
     void handle_event(const conv::ConversationEvent& ev)
     {
-        if (provider_ == config::Provider::Grok) paid_input_.observe(ev);
+        if (provider_ == config::Provider::Grok) {
+            paid_input_.observe(ev);
+            if (ev.type == conv::ConversationEventType::SpeechStarted ||
+                (ev.type == conv::ConversationEventType::UserTranscript && !paid_input_.open()))
+                (void)conv::paid_voice_test.note_user_activity(esp_timer_get_time() / 1000, paid_session_id_);
+            if (ev.type == conv::ConversationEventType::UserTranscript && conv::is_farewell(ev.text)) {
+                publish_input_ready(false);
+                M5.Mic.end();
+                conv::paid_voice_test.request_stop(conv::PaidVoiceTest::Reason::Farewell);
+                state_.set_balloon_text("对话已结束", 5000);
+                return;
+            }
+        }
         switch (ev.type) {
         case conv::ConversationEventType::StateChanged:
             // The protocol reaching Listening for the first time means the
@@ -1347,6 +1381,7 @@ private:
             break;
 
         case conv::ConversationEventType::AssistantTextDelta:
+            if (provider_ == config::Provider::Grok) paid_reply_done_ = false;
             assistant_text_ += ev.text;
             break;
 
@@ -1361,6 +1396,7 @@ private:
             break;
 
         case conv::ConversationEventType::AssistantAudioChunk:
+            if (provider_ == config::Provider::Grok) paid_reply_done_ = false;
             // Ignore late chunks for a turn we already abandoned (barge-in).
             if (ev.audio && (local_ == Local::Thinking || local_ == Local::Speaking)) {
                 const std::int64_t recv = now_us();
@@ -1406,6 +1442,7 @@ private:
             break;
 
         case conv::ConversationEventType::ResponseDone:
+            if (provider_ == config::Provider::Grok) paid_reply_done_ = true;
             // The response that carried a tool call ends here, but a follow-up
             // response (the model's actual reply) is still coming after we
             // submit the tool result — stay in Thinking and wait for it.
@@ -1416,7 +1453,7 @@ private:
             } else if (local_ == Local::Thinking && assistant_pcm_.empty()) {
                 // Text-only or empty turn: nothing will switch us to Speaking.
                 if (provider_ == config::Provider::Grok)
-                    conv::paid_voice_test.request_stop(conv::PaidVoiceTest::Reason::Completed);
+                    continue_paid_dialogue();
                 else enter_listening();
             }
             break;
@@ -1695,6 +1732,7 @@ private:
     conv::SingleTurnInput paid_input_;
     std::uint32_t paid_session_id_{0};
     bool paid_ready_announced_{false};
+    bool paid_reply_done_{false};
     std::uint32_t mic_window_send_errors_{0}, mic_window_record_errors_{0}, mic_window_since_ms_{0};
     std::int64_t mic_window_energy_{0};
     int mic_window_peak_{0};

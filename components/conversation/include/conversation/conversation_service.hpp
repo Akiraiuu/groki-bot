@@ -64,6 +64,7 @@ struct ConversationConfig {
     // Saved-Agent transport must check a live RAM-only permission before
     // opening the socket, queueing audio and each actual network write.
     std::function<bool()> session_permitted;
+    bool allow_multiple_turns{false}; // Only an explicitly bounded paid dialogue may reopen input.
 };
 
 enum class ConversationEventType : std::uint8_t {
@@ -168,6 +169,12 @@ public:
     // Interrupt the assistant's in-progress response (barge-in): stop the
     // backend generating/streaming and return the session to listening.
     virtual tl::expected<void, ConversationError> cancel_response() = 0;
+
+    // Reopen only after a finished reply, within the SAME active permission.
+    // The default refuses; it must never connect or request a new token.
+    virtual tl::expected<void, ConversationError> begin_input_turn() {
+        return tl::unexpected{ConversationError::InvalidState};
+    }
 
     virtual ConversationState state() const = 0;
 

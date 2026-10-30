@@ -130,7 +130,7 @@ int main() {
     assert(xQueueReceive(host_last_queue, &queued, 0));
     auto* bytes = static_cast<std::uint8_t*>(queued);
     assert(*static_cast<std::uint16_t*>(queued) == 1920);
-    assert(bytes[2] == 0x34 && bytes[3] == 0x12 && bytes[4] == 0xcc && bytes[5] == 0xff);
+    assert(bytes[8] == 0x34 && bytes[9] == 0x12 && bytes[10] == 0xcc && bytes[11] == 0xff);
     heap_caps_free(queued);
     // speech_stopped must not cut off the saved-Agent input transport while
     // the server is still finalizing the turn and preparing its audio reply.
@@ -188,6 +188,7 @@ int main() {
     assert(events.back().audio && events.back().audio->size() == 2); // Old buffer survives failed growth.
     host_receive(R"({"type":"response.done","response":{"status":"completed"}})");
     assert(client.state() == ConversationState::Listening);
+    assert(!client.begin_input_turn()); // Single-reply permission cannot reopen input.
     host_receive(R"({"type":"response.function_call_arguments.done","name":"x_search_arbitrary","call_id":"bad"})");
     assert(events.back().type == ConversationEventType::Error);
     client.stop();
@@ -212,4 +213,30 @@ int main() {
     host_receive(R"({"type":"session.updated","session":{"audio":{"output":{"format":{"type":"audio/pcm","rate":8000}}}}})");
     assert(client.state() == ConversationState::Error);
     client.stop();
+    // Explicit multi-turn config can rearm only after a completed reply and
+    // a finalized input, within the same still-live permission.
+    cfg.allow_multiple_turns = true;
+    assert(client.start(cfg)); host_connected(); host_receive(confirmed); host_receive(confirmed);
+    assert(!client.begin_input_turn());
+    assert(client.push_audio(pcm)); // Leave old-turn audio queued deliberately.
+    host_receive(R"({"type":"conversation.item.input_audio_transcription.completed","transcript":"first question"})");
+    assert(!client.begin_input_turn()); // Not before response.done.
+    host_receive(R"({"type":"response.created","response":{"id":"multi1"}})");
+    assert(!client.begin_input_turn());
+    host_receive(R"({"type":"response.done","response":{"status":"completed"}})");
+    assert(client.begin_input_turn());
+    assert(!xQueueReceive(host_last_queue, &queued, 0)); // Old queued PCM was freed, not resurrected.
+    assert(!client.begin_input_turn()); // A duplicate cannot reset the current turn.
+    assert(client.push_audio(pcm));
+    assert(xQueueReceive(host_last_queue, &queued, 0));
+    heap_caps_free(queued);
+    host_receive(R"({"type":"conversation.item.input_audio_transcription.completed","transcript":"second question"})");
+    assert(client.push_audio(pcm));
+    assert(!xQueueReceive(host_last_queue, &queued, 0)); // Per-turn close still works.
+    host_receive(R"({"type":"response.created","response":{"id":"multi2"}})");
+    host_receive(R"({"type":"response.done","response":{"status":"completed"}})");
+    permitted = false;
+    assert(!client.begin_input_turn()); // Expired/stopped permission wins.
+    client.stop();
+
 }

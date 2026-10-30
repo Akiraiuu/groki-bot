@@ -1658,15 +1658,16 @@ esp_err_t handle_paid_voice_status(httpd_req_t* req)
     if (!require_auth(req)) return ESP_OK;
     const auto s = conversation::paid_voice_test.snapshot(esp_timer_get_time() / 1000);
     constexpr const char* phases[] = {"idle", "queued", "running", "stopping"};
-    constexpr const char* reasons[] = {"none", "completed", "cancelled", "timeout", "error", "interrupted"};
+    constexpr const char* reasons[] = {"none", "completed", "cancelled", "timeout", "error", "interrupted", "idle_timeout", "farewell", "round_limit"};
     const auto& w = conversation::local_wake_status;
     char body[1400];
     std::snprintf(body, sizeof(body),
-        "{\"phase\":\"%s\",\"reason\":\"%s\",\"available\":%s,\"remaining_ms\":%lld,\"max_rounds\":1,\"max_seconds\":60,\"approval_id\":%u,\"mode\":\"%s\",\"input_ready\":%s,\"local_record_seconds\":5,\"local_max_seconds\":15,"
+        "{\"phase\":\"%s\",\"reason\":\"%s\",\"available\":%s,\"remaining_ms\":%lld,\"max_rounds\":%u,\"max_seconds\":60,\"completed_rounds\":%u,\"idle_timeout_ms\":%lld,\"idle_remaining_ms\":%lld,\"approval_id\":%u,\"mode\":\"%s\",\"input_ready\":%s,\"local_record_seconds\":5,\"local_max_seconds\":15,"
         "\"local_wake\":{\"enabled\":%s,\"check_only\":%s,\"state\":%d,\"stage\":%d,\"error\":%d,\"microphone_active\":%s,\"worker_active\":%s,\"remaining_ms\":%u,\"previous_stage\":%u,\"reset_reason\":%d,\"internal_free\":%u,\"psram_free\":%u,\"stack_free\":%u,"
         "\"frames\":%u,\"samples_per_frame\":%u,\"peak\":%u,\"mean_abs_peak\":%u,\"clipped_samples\":%u,\"timeouts\":%u,\"rejected\":%u,\"detect_max_us\":%u,\"last_command\":%d,\"best_target_per_mille\":%u,\"best_other_per_mille\":%u}}",
         phases[static_cast<int>(s.phase)], reasons[static_cast<int>(s.reason)], s.available ? "true" : "false",
-        static_cast<long long>(s.remaining_ms), static_cast<unsigned>(s.approval_id),
+        static_cast<long long>(s.remaining_ms), static_cast<unsigned>(s.max_rounds), static_cast<unsigned>(s.completed_rounds),
+        static_cast<long long>(s.idle_timeout_ms), static_cast<long long>(s.idle_remaining_ms), static_cast<unsigned>(s.approval_id),
         s.mode == conversation::PaidVoiceTest::Mode::Local ? "local" : "paid",
         s.input_ready ? "true" : "false",
         w.enabled.load() ? "true" : "false", w.check_only.load() ? "true" : "false",
@@ -1701,7 +1702,7 @@ esp_err_t handle_paid_voice_control(httpd_req_t* req)
     auto* root = cJSON_ParseWithLength(body.data(), body.size());
     const auto command = conversation::parse_paid_voice_command(root);
     const auto* id = cJSON_GetObjectItemCaseSensitive(root, "approval_id");
-    const auto approval_id = command == conversation::PaidVoiceCommand::Start || command == conversation::PaidVoiceCommand::LocalRecord
+    const auto approval_id = command == conversation::PaidVoiceCommand::Start || command == conversation::PaidVoiceCommand::StartDialogue || command == conversation::PaidVoiceCommand::LocalRecord
         ? static_cast<std::uint32_t>(id->valuedouble) : 0;
     cJSON_Delete(root);
     using Command = conversation::PaidVoiceCommand;
@@ -1713,7 +1714,8 @@ esp_err_t handle_paid_voice_control(httpd_req_t* req)
         conversation::paid_voice_test.request_stop();
     }
     else if (!conversation::paid_voice_test.request_start(true, esp_timer_get_time() / 1000, approval_id,
-        command == Command::LocalRecord ? conversation::PaidVoiceTest::Mode::Local : conversation::PaidVoiceTest::Mode::Paid))
+        command == Command::LocalRecord ? conversation::PaidVoiceTest::Mode::Local : conversation::PaidVoiceTest::Mode::Paid,
+        command == Command::StartDialogue ? conversation::PaidVoiceTest::Profile::Dialogue : conversation::PaidVoiceTest::Profile::SingleReply))
         return send_error(req, "409 Conflict", "Test unavailable or already active; no new permission granted");
     return handle_paid_voice_status(req);
 }

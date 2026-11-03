@@ -35,6 +35,8 @@
 #include "conversation/single_turn_input.hpp"
 #include "conversation/wake_confirmation.hpp"
 #include "conversation/farewell.hpp"
+#include "conversation/bounded_event_inbox.hpp"
+#include "conversation/inbox_fault_bridge.hpp"
 #include "local_wake.hpp"
 #include "conversation/xiaozhi_client.hpp"
 #include "led_runtime.hpp"
@@ -48,6 +50,7 @@ namespace stackchan::app {
 namespace {
 
 namespace conv = stackchan::conversation;
+namespace control = stopwatch::candidate;
 
 constexpr const char* kTag = "conv-task";
 
@@ -270,7 +273,15 @@ public:
         }
         ESP_LOGI(kTag, "Wi-Fi up, starting %s conversation", provider_name());
 
-        event_queue_ = xQueueCreate(32, sizeof(conv::ConversationEvent*));
+        if (provider_ == config::Provider::Grok) {
+            if (!paid_queue_backend_.begin()) {
+                state_.conv.status.store(ConvStatus::Error, std::memory_order_relaxed);
+                vTaskDelete(nullptr);
+                return;
+            }
+        } else {
+            event_queue_ = xQueueCreate(32, sizeof(conv::ConversationEvent*));
+        }
         mic_buf_[0].resize(mic_chunk_samples_);
         mic_buf_[1].resize(mic_chunk_samples_);
 
@@ -554,6 +565,17 @@ private:
             paid_input_.reset();
             paid_reply_done_ = false;
             paid_session_id_ = conv::paid_voice_test.snapshot(esp_timer_get_time() / 1000).approval_id;
+            // Prior client shutdown and producer quiescence precede this scope.
+            flush_events();
+            inbox_failure_handled_ = false;
+            if (!paid_inbox_.policy().begin(paid_session_id_)) {
+                conv::paid_voice_test.request_stop(Test::Reason::Error, Test::Fault::EventInbox);
+                conv::paid_voice_test.set_available(false);
+                state_.set_balloon_text("事件资源未关闭，请彻底关机", 5000);
+                // Keep Stopping and keep all owners alive. Do not falsely finish,
+                // reuse the client, or admit another grant after an invariant error.
+                for (;;) vTaskDelay(pdMS_TO_TICKS(50));
+            }
             const auto scope = conv::paid_voice_test.snapshot(esp_timer_get_time() / 1000);
             state_.set_balloon_text(scope.max_rounds > 1 ? "对话最多3轮，整次60秒，空闲10秒结束" : "付费语音测试：1轮，最多60秒", 5000);
             // Wi-Fi wait consumes the same budget. No token is requested yet.
@@ -572,6 +594,7 @@ private:
             // Revoke permission before releasing any transport. Queued audio
             // cannot pass the sender's final per-write permission check.
             conv::paid_voice_test.request_stop(Test::Reason::Timeout);
+            paid_inbox_.policy().revoke(paid_session_id_);
             M5.Mic.end();
             M5.Speaker.end();
             client_->stop();
@@ -593,8 +616,34 @@ private:
 
     // ---- event bridge: WS task -> this task --------------------------------
 
-    void enqueue_event(const conv::ConversationEvent& ev)
+    bool handle_event_inbox_failure()
     {
+        if (provider_ != config::Provider::Grok || inbox_failure_handled_) return false;
+        const auto first = paid_inbox_.policy().first_fault();
+        if (first.kind == control::DeliveryFault::None) return false;
+        inbox_failure_handled_ = true;
+        return control::stop_on_inbox_failure(first, conv::paid_voice_test);
+    }
+
+    void enqueue_event(const conv::ConversationEvent& ev, std::uint32_t generation = 0)
+    {
+        if (provider_ == config::Provider::Grok) {
+            const auto type = static_cast<std::uint8_t>(ev.type);
+            if (ev.type == conv::ConversationEventType::Error) {
+                // Callback remains nonblocking; no PaidVoiceTest mutex or raw text.
+                paid_inbox_.policy().note_source_error(generation, type,
+                    ev.error ? static_cast<int>(*ev.error) : -1);
+                return;
+            }
+            const bool payload = ev.type == conv::ConversationEventType::AssistantAudioChunk ||
+                ev.type == conv::ConversationEventType::AssistantTextDelta ||
+                ev.type == conv::ConversationEventType::AssistantEmotion ||
+                ev.type == conv::ConversationEventType::LedColor ||
+                ev.type == conv::ConversationEventType::HeadPose;
+            (void)paid_inbox_.push(ev, payload ? control::EventClass::Payload : control::EventClass::Control,
+                                   generation, type);
+            return;
+        }
         auto* copy = new conv::ConversationEvent(ev);
         if (xQueueSend(event_queue_, &copy, 0) != pdTRUE) {
             ESP_LOGW(kTag, "event queue full, dropping %d", static_cast<int>(ev.type));
@@ -604,10 +653,24 @@ private:
 
     void drain_events()
     {
+        if (provider_ == config::Provider::Grok) {
+            // Candidate values only: SDK scheduling still requires validation.
+            control::EventBatchBudget budget(4, 2000, now_us());
+            while (budget.may_process_next(now_us())) {
+                if (handle_event_inbox_failure()) break;
+                auto packet = paid_inbox_.pop();
+                if (!packet) break;
+                if (packet->generation() == paid_session_id_ &&
+                    conv::paid_voice_test.permitted(esp_timer_get_time() / 1000))
+                    handle_event(packet->event);
+                budget.processed_one();
+            }
+            (void)handle_event_inbox_failure();
+            return;
+        }
         conv::ConversationEvent* ev = nullptr;
         while (xQueueReceive(event_queue_, &ev, 0) == pdTRUE) {
-            if (provider_ != config::Provider::Grok ||
-                conv::paid_voice_test.permitted(esp_timer_get_time() / 1000)) handle_event(*ev);
+            handle_event(*ev);
             delete ev;
         }
     }
@@ -618,6 +681,11 @@ private:
     // immediately knocked over by a left-over DISCONNECTED from the old one.
     void flush_events(bool preserve_connection_events = false)
     {
+        if (provider_ == config::Provider::Grok) {
+            // Called only after prior client stop; no producer may still enqueue.
+            (void)paid_inbox_.discard_quiescent();
+            return;
+        }
         std::vector<conv::ConversationEvent*> retained;
         conv::ConversationEvent* ev = nullptr;
         std::size_t dropped = 0;
@@ -659,7 +727,9 @@ private:
             cfg.agent_id = std::move(ticket->agent_id);
             // Reconnect always creates a new transport with a freshly issued token.
             client_ = std::make_unique<conv::OpenAiRealtimeClient>(std::move(ticket->token), conv::RealtimeBackend::Xai);
-            client_->set_event_callback([this](const conv::ConversationEvent& ev) { enqueue_event(ev); });
+            client_->set_event_callback([this, test_id](const conv::ConversationEvent& ev) {
+                enqueue_event(ev, test_id);
+            });
         }
         // User-set system prompt (over Wi-Fi) wins; empty falls back to the
         // firmware's built-in persona.
@@ -1711,6 +1781,19 @@ private:
     conv::HeadCommandQueue head_commands_;
     conv::ConversationConfig config_{};
     std::unique_ptr<conv::ConversationService> client_;
+    struct PaidQueueBackend {
+        QueueHandle_t handle{nullptr};
+        bool begin() { handle = xQueueCreate(32, sizeof(void*)); return handle != nullptr; }
+        bool push(void* packet) { return xQueueSend(handle, &packet, 0) == pdTRUE; }
+        void* pop() {
+            void* packet = nullptr;
+            return xQueueReceive(handle, &packet, 0) == pdTRUE ? packet : nullptr;
+        }
+    };
+    PaidQueueBackend paid_queue_backend_;
+    using PaidInbox = control::BoundedEventInbox<conv::ConversationEvent, PaidQueueBackend, 32, 8>;
+    PaidInbox paid_inbox_{paid_queue_backend_};
+    bool inbox_failure_handled_{false};
     QueueHandle_t event_queue_{nullptr};
 
     // Per-provider audio rates set in the constructor.

@@ -107,3 +107,17 @@ target_include_directories(conversation_test_local_wake_worker PRIVATE
 target_link_libraries(conversation_test_local_wake_worker PRIVATE Threads::Threads)
 target_compile_options(conversation_test_local_wake_worker PRIVATE -Wall -Wextra)
 add_test(NAME local_wake_worker COMMAND conversation_test_local_wake_worker)
+
+# Bounded event admission and close-ownership policy; no device or network.
+add_executable(conversation_test_voice_control_policy test_voice_control_policy.cpp)
+target_include_directories(conversation_test_voice_control_policy PRIVATE ${CONVERSATION_ROOT}/include/conversation)
+target_link_libraries(conversation_test_voice_control_policy PRIVATE Threads::Threads)
+target_compile_options(conversation_test_voice_control_policy PRIVATE -Wall -Wextra -Werror)
+add_test(NAME voice_control_policy COMMAND conversation_test_voice_control_policy)
+
+# Queue backend/allocator doubles, with the actual paid permission state header.
+add_executable(conversation_test_event_inbox test_event_inbox.cpp)
+target_include_directories(conversation_test_event_inbox PRIVATE ${CONVERSATION_ROOT}/include/conversation)
+target_link_libraries(conversation_test_event_inbox PRIVATE Threads::Threads)
+target_compile_options(conversation_test_event_inbox PRIVATE -Wall -Wextra -Werror)
+add_test(NAME event_inbox COMMAND conversation_test_event_inbox)

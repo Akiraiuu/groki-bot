@@ -17,9 +17,10 @@ public:
     enum class Phase { Idle, Queued, Running, Stopping };
     enum class Reason { None, Completed, Cancelled, Timeout, Error, Interrupted, IdleTimeout, Farewell, RoundLimit };
     enum class Fault { None, Unspecified, Unavailable, UnexpectedReply, LocalCapture, LocalPlayback,
-                       WakeRelease, Connect, Recovery, AudioUpload, Microphone, InputTurnReset, ConversationEvent };
+                       WakeRelease, Connect, Recovery, AudioUpload, Microphone, InputTurnReset, ConversationEvent, EventInbox };
     static const char* fault_name(Fault fault) {
         switch (fault) {
+        case Fault::EventInbox: return "event_inbox";
         case Fault::None: return "none";
         case Fault::Unspecified: return "unspecified";
         case Fault::Unavailable: return "unavailable";

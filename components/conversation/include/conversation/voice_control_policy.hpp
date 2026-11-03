@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BSL-1.0
 // Portable policy candidate. No network, device, credentials, or implicit grants.
 #pragma once
-#include <atomic>
+#include "event_policy_lock.hpp"
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -26,10 +26,11 @@ struct FaultSnapshot {
 template<std::uint32_t Capacity, std::uint32_t ControlReserve>
 class EventDeliveryPolicy {
     static_assert(ControlReserve > 0 && ControlReserve < Capacity);
-    static_assert(std::atomic<std::uint32_t>::is_always_lock_free,
-                  "callback admission requires lock-free 32-bit atomics");
     static constexpr auto payload_limit = Capacity - ControlReserve;
 public:
+    EventDeliveryPolicy() = default;
+    EventDeliveryPolicy(const EventDeliveryPolicy&) = delete;
+    EventDeliveryPolicy& operator=(const EventDeliveryPolicy&) = delete;
     class Permit {
         friend class EventDeliveryPolicy;
         EventDeliveryPolicy* owner_{};
@@ -59,45 +60,44 @@ public:
     };
 
     bool begin(std::uint32_t generation) noexcept {
-        if (!generation || generation == generation_.load(std::memory_order_acquire) || accepting_.load(std::memory_order_acquire) ||
-            pending_.load(std::memory_order_acquire) != 0) return false;
+        const EventPolicyGuard guard{lock_};
+        if (!generation || generation == generation_ || accepting_ || pending_ != 0) return false;
         // Caller has joined/quiesced the old producer, not merely timed it out.
-        generation_.store(generation, std::memory_order_relaxed);
-        first_fault_.store(0, std::memory_order_relaxed);
-        rejected_.store(0, std::memory_order_relaxed);
-        stale_.store(0, std::memory_order_relaxed);
-        accepting_.store(true, std::memory_order_release);
+        generation_ = generation;
+        first_fault_ = rejected_ = stale_ = 0;
+        accepting_ = true;
         return true;
     }
 
     void revoke(std::uint32_t generation) noexcept {
-        if (generation_.load(std::memory_order_acquire) == generation)
-            accepting_.store(false, std::memory_order_release);
+        const EventPolicyGuard guard{lock_};
+        if (generation_ == generation) accepting_ = false;
     }
 
     bool current(std::uint32_t generation) const noexcept {
-        return generation && accepting_.load(std::memory_order_acquire) &&
-               generation_.load(std::memory_order_acquire) == generation;
+        const EventPolicyGuard guard{lock_};
+        return current_locked(generation);
     }
 
     std::optional<Permit> try_admit(EventClass kind, std::uint32_t generation,
                                     std::uint8_t event_type) noexcept {
-        if (!current(generation)) { increment(stale_); return std::nullopt; }
-        if (!acquire_below(pending_, Capacity)) {
-            reject(generation, DeliveryFault::TotalCapacity, event_type);
-            return std::nullopt;
-        }
-        // An old callback racing revoke/new begin cannot spend the new scope.
-        if (!current(generation)) {
-            pending_.fetch_sub(1, std::memory_order_release);
-            increment(stale_); return std::nullopt;
-        }
         const bool payload = kind == EventClass::Payload;
-        if (payload && !acquire_below(payload_pending_, payload_limit)) {
-            pending_.fetch_sub(1, std::memory_order_release);
-            reject(generation, DeliveryFault::PayloadCapacity, event_type);
-            return std::nullopt;
+        {
+            const EventPolicyGuard guard{lock_};
+            if (!current_locked(generation)) { increment(stale_); return std::nullopt; }
+            if (pending_ == Capacity) {
+                reject_locked(generation, DeliveryFault::TotalCapacity, event_type);
+                return std::nullopt;
+            }
+            if (payload && payload_pending_ == payload_limit) {
+                reject_locked(generation, DeliveryFault::PayloadCapacity, event_type);
+                return std::nullopt;
+            }
+            // Generation, both counters and first cause share one linearization.
+            ++pending_;
+            if (payload) ++payload_pending_;
         }
+        // No Permit destruction, allocation, queue call or client work under lock.
         Permit result{*this, generation, payload};
         return std::optional<Permit>{std::move(result)};
     }
@@ -106,59 +106,57 @@ public:
     // Consumer maps this to an explicit failed stop. It must not report completion.
     void note_source_error(std::uint32_t generation, std::uint8_t event_type,
                            int detail) noexcept {
-        note_fault(generation, DeliveryFault::SourceError, event_type, detail);
+        const EventPolicyGuard guard{lock_};
+        note_fault_locked(generation, DeliveryFault::SourceError, event_type, detail);
     }
     void note_queue_rejection(std::uint32_t generation, std::uint8_t event_type) noexcept {
-        reject(generation, DeliveryFault::QueueRejected, event_type);
+        const EventPolicyGuard guard{lock_};
+        reject_locked(generation, DeliveryFault::QueueRejected, event_type);
     }
     void note_allocation_failure(std::uint32_t generation, std::uint8_t event_type) noexcept {
-        reject(generation, DeliveryFault::AllocationFailed, event_type);
+        const EventPolicyGuard guard{lock_};
+        reject_locked(generation, DeliveryFault::AllocationFailed, event_type);
     }
     FaultSnapshot first_fault() const noexcept {
-        const auto packed = first_fault_.load(std::memory_order_acquire);
+        const EventPolicyGuard guard{lock_};
+        const auto packed = first_fault_;
         return {static_cast<DeliveryFault>(packed & 0xffu),
                 static_cast<std::uint8_t>((packed >> 8) & 0xffu),
                 static_cast<int>((packed >> 16) & 0xffu) - 1};
     }
-    std::uint32_t pending() const noexcept { return pending_.load(std::memory_order_acquire); }
-    std::uint32_t payload_pending() const noexcept { return payload_pending_.load(std::memory_order_acquire); }
-    std::uint32_t rejected() const noexcept { return rejected_.load(std::memory_order_relaxed); }
-    std::uint32_t stale() const noexcept { return stale_.load(std::memory_order_relaxed); }
+    std::uint32_t pending() const noexcept { const EventPolicyGuard guard{lock_}; return pending_; }
+    std::uint32_t payload_pending() const noexcept { const EventPolicyGuard guard{lock_}; return payload_pending_; }
+    std::uint32_t rejected() const noexcept { const EventPolicyGuard guard{lock_}; return rejected_; }
+    std::uint32_t stale() const noexcept { const EventPolicyGuard guard{lock_}; return stale_; }
 
 private:
-    static bool acquire_below(std::atomic<std::uint32_t>& count, std::uint32_t limit) noexcept {
-        auto value = count.load(std::memory_order_relaxed);
-        while (value < limit) {
-            if (count.compare_exchange_weak(value, value + 1,
-                    std::memory_order_acq_rel, std::memory_order_relaxed)) return true;
-        }
-        return false;
+    bool current_locked(std::uint32_t generation) const noexcept {
+        return generation && accepting_ && generation_ == generation;
     }
-    static void increment(std::atomic<std::uint32_t>& count) noexcept {
-        auto value = count.load(std::memory_order_relaxed);
-        while (value != UINT32_MAX && !count.compare_exchange_weak(value, value + 1,
-                   std::memory_order_relaxed, std::memory_order_relaxed)) {}
+    static void increment(std::uint32_t& count) noexcept {
+        if (count != UINT32_MAX) ++count;
     }
     void release(bool payload) noexcept {
-        if (payload) payload_pending_.fetch_sub(1, std::memory_order_release);
-        pending_.fetch_sub(1, std::memory_order_release);
+        const EventPolicyGuard guard{lock_};
+        if (payload) --payload_pending_;
+        --pending_;
     }
-    void reject(std::uint32_t generation, DeliveryFault fault, std::uint8_t type) noexcept {
-        increment(rejected_); note_fault(generation, fault, type, -1);
+    void reject_locked(std::uint32_t generation, DeliveryFault fault, std::uint8_t type) noexcept {
+        if (!current_locked(generation)) return;
+        increment(rejected_); note_fault_locked(generation, fault, type, -1);
     }
-    void note_fault(std::uint32_t generation, DeliveryFault fault,
+    void note_fault_locked(std::uint32_t generation, DeliveryFault fault,
                     std::uint8_t type, int detail) noexcept {
-        if (!current(generation) || fault == DeliveryFault::None) return;
+        if (!current_locked(generation) || fault == DeliveryFault::None || first_fault_ != 0) return;
         const auto code = static_cast<std::uint32_t>(detail >= 0 && detail <= 7 ? detail + 1 : 0);
         const auto packed = static_cast<std::uint32_t>(fault) |
                             (static_cast<std::uint32_t>(type) << 8) | (code << 16);
-        std::uint32_t empty = 0;
-        first_fault_.compare_exchange_strong(empty, packed,
-            std::memory_order_release, std::memory_order_relaxed);
+        first_fault_ = packed;
     }
-    std::atomic<std::uint32_t> generation_{0}, pending_{0}, payload_pending_{0};
-    std::atomic<std::uint32_t> first_fault_{0}, rejected_{0}, stale_{0};
-    std::atomic<bool> accepting_{false};
+    mutable EventPolicyLock lock_;
+    std::uint32_t generation_{0}, pending_{0}, payload_pending_{0};
+    std::uint32_t first_fault_{0}, rejected_{0}, stale_{0};
+    bool accepting_{false};
 };
 
 // Budget checks BETWEEN handlers. It cannot preempt a blocking single handler.

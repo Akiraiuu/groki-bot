@@ -115,6 +115,16 @@ target_link_libraries(conversation_test_voice_control_policy PRIVATE Threads::Th
 target_compile_options(conversation_test_voice_control_policy PRIVATE -Wall -Wextra -Werror)
 add_test(NAME voice_control_policy COMMAND conversation_test_voice_control_policy)
 
+# Compile/execute the ESP adapter branch against task API doubles on the host.
+# This is not an Xtensa build or a hardware scheduling/timing test.
+add_executable(conversation_test_voice_control_policy_esp_boundary test_voice_control_policy.cpp)
+target_include_directories(conversation_test_voice_control_policy_esp_boundary PRIVATE
+    policy_esp_stubs ${CONVERSATION_ROOT}/include/conversation)
+target_compile_definitions(conversation_test_voice_control_policy_esp_boundary PRIVATE ESP_PLATFORM=1)
+target_link_libraries(conversation_test_voice_control_policy_esp_boundary PRIVATE Threads::Threads)
+target_compile_options(conversation_test_voice_control_policy_esp_boundary PRIVATE -Wall -Wextra -Werror)
+add_test(NAME voice_control_policy_esp_boundary COMMAND conversation_test_voice_control_policy_esp_boundary)
+
 # Queue backend/allocator doubles, with the actual paid permission state header.
 add_executable(conversation_test_event_inbox test_event_inbox.cpp)
 target_include_directories(conversation_test_event_inbox PRIVATE ${CONVERSATION_ROOT}/include/conversation)

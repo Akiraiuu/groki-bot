@@ -630,7 +630,7 @@ private:
         if (provider_ == config::Provider::Grok) {
             const auto type = static_cast<std::uint8_t>(ev.type);
             if (ev.type == conv::ConversationEventType::Error) {
-                // Callback remains nonblocking; no PaidVoiceTest mutex or raw text.
+                // Short policy critical section only; no PaidVoiceTest mutex or raw text.
                 paid_inbox_.policy().note_source_error(generation, type,
                     ev.error ? static_cast<int>(*ev.error) : -1);
                 return;

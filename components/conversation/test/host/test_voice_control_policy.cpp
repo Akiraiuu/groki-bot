@@ -6,7 +6,11 @@
 #include <iostream>
 #include <optional>
 #include <thread>
+#include <type_traits>
 #include <vector>
+#if defined(ESP_PLATFORM)
+#include "bounded_event_inbox.hpp"
+#endif
 
 using namespace stopwatch::candidate;
 using Policy = EventDeliveryPolicy<32, 8>;
@@ -190,12 +194,102 @@ static void test_concurrent_admission() {
     p.revoke(500);
 }
 
+// Exercise a real revocation race; each worker also probes after revoke returns.
+static void test_revoke_racing_producers() {
+    Policy p; check(p.begin(600), "revoke race scope starts");
+    std::atomic<unsigned> ready{0};
+    std::atomic<bool> revoked{false}, failed{false};
+    std::array<std::thread, 4> threads;
+    for (auto& t : threads) t = std::thread([&] {
+        ready.fetch_add(1);
+        while (!revoked.load()) {
+            auto token = p.try_admit(EventClass::Payload, 600, 6);
+            if (token && token->generation() != 600) failed.store(true);
+        }
+        for (unsigned i=0; i<1000; ++i)
+            if (p.try_admit(EventClass::Control, 600, 7)) failed.store(true);
+    });
+    while (ready.load() != 4) std::this_thread::yield();
+    p.revoke(600); revoked.store(true);
+    for (auto& t : threads) t.join();
+    check(!failed.load() && p.pending()==0 && p.payload_pending()==0,
+          "revocation race cannot admit after return or leak permits");
+    check(p.first_fault().kind==DeliveryFault::None, "revocation is not an overflow error");
+    check(p.begin(601), "new scope only after producers joined");
+    p.note_source_error(600, 11, 4);
+    p.note_queue_rejection(600, 6);
+    p.note_allocation_failure(600, 6);
+    p.revoke(600);
+    check(p.current(601) && p.first_fault().kind==DeliveryFault::None && p.rejected()==0,
+          "late old-generation failures and revoke cannot poison new scope");
+    std::array<std::thread, 4> fault_threads;
+    for (unsigned i=0; i<4; ++i) fault_threads[i] = std::thread([&,i] {
+        for (unsigned n=0; n<1000; ++n) p.note_source_error(601,11,static_cast<int>(i));
+    });
+    for (auto& t : fault_threads) t.join();
+    const auto first = p.first_fault();
+    check(first.kind==DeliveryFault::SourceError && first.source_error>=0 && first.source_error<4,
+          "concurrent source faults produce one finite first cause");
+    p.note_source_error(601,11,7); p.revoke(601);
+    check(p.first_fault().source_error==first.source_error, "first cause survives late fault and revoke");
+    check(!std::is_copy_constructible_v<Policy> && !std::is_move_constructible_v<Policy>,
+          "permit owner cannot move or be copied");
+}
+
+#if defined(ESP_PLATFORM)
+struct BoundaryAllocator {
+    template<class Packet, class E, class Permit>
+    static Packet* make(const E& e, Permit&& permit) {
+        if (!policy_esp_stub::outside()) std::abort();
+        return new Packet(e,std::move(permit));
+    }
+};
+static void test_esp_lock_boundary() {
+    struct Event {
+        Event() = default;
+        Event(const Event&) { if (!policy_esp_stub::outside()) std::abort(); }
+        ~Event() { if (!policy_esp_stub::outside()) std::abort(); }
+    };
+    struct Queue {
+        void* packet{};
+        bool reject{false};
+        bool push(void* p) {
+            if (!policy_esp_stub::outside()) std::abort();
+            if (reject || packet) return false;
+            packet=p; return true;
+        }
+        void* pop() {
+            if (!policy_esp_stub::outside()) std::abort();
+            return std::exchange(packet,nullptr);
+        }
+    };
+    Queue queue;
+    BoundedEventInbox<Event,Queue,32,8,BoundaryAllocator> inbox(queue);
+    check(inbox.policy().begin(700), "ESP branch boundary scope starts");
+    Event e;
+    check(inbox.push(e,EventClass::Payload,700,6), "ESP branch copies/allocates/enqueues outside critical section");
+    { auto packet=inbox.pop(); check(bool(packet), "ESP branch consumer owns packet"); }
+    queue.reject=true;
+    check(!inbox.push(e,EventClass::Payload,700,6), "ESP branch rejected enqueue rolls back outside critical section");
+    check(inbox.policy().pending()==0 && inbox.policy().payload_pending()==0,
+          "ESP branch rollback and packet destruction return permits");
+    inbox.policy().revoke(700);
+    check(policy_esp_stub::outside() && policy_esp_stub::entries.load()>100000 &&
+          policy_esp_stub::entries.load()==policy_esp_stub::exits.load(),
+          "ESP branch all exits balanced and no recursive critical section");
+}
+#endif
+
 int main() {
     test_admission_and_faults();
     test_move_rollback_and_order();
     test_batch_budget();
     test_close_ownership();
     test_concurrent_admission();
+    test_revoke_racing_producers();
+#if defined(ESP_PLATFORM)
+    test_esp_lock_boundary();
+#endif
     std::cout << "{\"status\":\"passed\",\"checks\":" << checks
               << ",\"concurrent_lease_attempts\":100000,\"device_accessed\":false,\"paid_api_called\":false}\n";
 }

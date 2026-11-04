@@ -36,7 +36,7 @@
       "path": "components/esp-tls/esp_tls_scope.c",
       "candidate": "idf/candidate/components/esp-tls/esp_tls_scope.c",
       "original_sha256": null,
-      "candidate_sha256": "52ea73fefe03ef98ebda60fbcbf8291dc6a11d6ae0f7f4573d2c2d2ac33cdf5c"
+      "candidate_sha256": "0b217b9354aba2c97773784eb5a67da5c4d3688c0a74cf8938dde38dc6b59b20"
     },
     {
       "kind": "idf",

@@ -39,7 +39,11 @@ bool tls_scope_init(esp_tls_scope*s,uint32_t g,int64_t now,int64_t end){
 }
 bool tls_scope_bind(esp_tls_scope*s,uint32_t g,void*owner){
     state_lock();bool ok=current(s,g)&&owner&&!s->tls_owner&&!s->creation_started&&!s->io_mask&&!s->close_taken;
-    if(ok)s->tls_owner=owner;state_unlock();return ok;
+    if(ok){
+        s->tls_owner=owner;
+    }
+    state_unlock();
+    return ok;
 }
 bool tls_scope_set_permission(esp_tls_scope*s,uint32_t g,bool(*probe)(void*),void*context){
     state_lock();const bool ok=current(s,g)&&probe&&!s->permission_probe&&!s->sdk_owner&&!s->tls_owner&&!s->io_mask&&!s->creation_started;
@@ -47,7 +51,11 @@ bool tls_scope_set_permission(esp_tls_scope*s,uint32_t g,bool(*probe)(void*),voi
 }
 bool tls_scope_bind_sdk(esp_tls_scope*s,uint32_t g,void*owner){
     state_lock();const bool ok=current(s,g)&&owner&&!s->cancelled&&!s->sdk_owner&&!s->tls_owner&&!s->creation_started&&!s->io_mask&&!s->close_taken;
-    if(ok)s->sdk_owner=owner;state_unlock();return ok;
+    if(ok){
+        s->sdk_owner=owner;
+    }
+    state_unlock();
+    return ok;
 }
 tls_scope_result tls_scope_io_begin(esp_tls_scope*s,uint32_t g,int64_t now,tls_scope_io*t){
     if(!t||t->valid)return TLS_SCOPE_REJECTED;
@@ -177,5 +185,9 @@ tls_scope_snapshot tls_scope_observe(esp_tls_scope*s,uint32_t g,int64_t now){
 }
 bool tls_scope_release(esp_tls_scope*s,uint32_t g){
     state_lock();bool ok=current(s,g)&&s->close_confirmed&&!s->io_mask&&!s->creation_active&&!s->connect_active&&!s->shutdown_active&&!s->close_active;
-    if(ok)s->owned=false;state_unlock();return ok;
+    if(ok){
+        s->owned=false;
+    }
+    state_unlock();
+    return ok;
 }

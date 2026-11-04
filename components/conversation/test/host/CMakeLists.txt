@@ -178,6 +178,8 @@ get_filename_component(STOPWATCH_PROJECT_ROOT "${CONVERSATION_ROOT}/../.." ABSOL
 set(STOPWATCH_SCOPE_ROOT "${STOPWATCH_PROJECT_ROOT}/patches/stopwatch-controlled-close/idf/candidate/components/esp-tls")
 add_library(conversation_scope_host STATIC "${STOPWATCH_SCOPE_ROOT}/esp_tls_scope.c")
 target_compile_features(conversation_scope_host PUBLIC c_std_11)
+# Match the firmware GCC rule that exposed the scope indentation error.
+target_compile_options(conversation_scope_host PRIVATE -Wall -Wextra -Werror=misleading-indentation)
 target_include_directories(conversation_scope_host PUBLIC "${STOPWATCH_SCOPE_ROOT}")
 foreach(target conversation_test_realtime_client conversation_test_saved_agent conversation_test_controlled_close)
     target_link_libraries(${target} PRIVATE conversation_scope_host)

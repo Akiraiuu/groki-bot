@@ -14,6 +14,7 @@
 #include <tl/expected.hpp>
 
 #include "conversation/conversation_error.hpp"
+#include "conversation/controlled_close.hpp"
 
 namespace stackchan::conversation {
 
@@ -64,6 +65,8 @@ struct ConversationConfig {
     // Saved-Agent transport must check a live RAM-only permission before
     // opening the socket, queueing audio and each actual network write.
     std::function<bool()> session_permitted;
+    // Original approval scope end, including preparation. Required for xAI.
+    std::int64_t session_deadline_us{0};
     bool allow_multiple_turns{false}; // Only an explicitly bounded paid dialogue may reopen input.
 };
 
@@ -153,6 +156,11 @@ public:
 
     // Tear down the session.
     virtual void stop() = 0;
+
+    // Explicit application quiescence boundary. Never wait for transport here.
+    // Unsupported backends must not be treated as closed by the caller.
+    virtual void begin_controlled_close() {}
+    virtual ControlledCloseSnapshot controlled_close_snapshot() const { return {}; }
 
     // Feed a chunk of microphone PCM16 (mono, ConversationConfig sample rate).
     virtual tl::expected<void, ConversationError> push_audio(std::span<const std::int16_t> pcm) = 0;

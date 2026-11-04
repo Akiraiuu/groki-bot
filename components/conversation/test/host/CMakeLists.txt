@@ -131,3 +131,55 @@ target_include_directories(conversation_test_event_inbox PRIVATE ${CONVERSATION_
 target_link_libraries(conversation_test_event_inbox PRIVATE Threads::Threads)
 target_compile_options(conversation_test_event_inbox PRIVATE -Wall -Wextra -Werror)
 add_test(NAME event_inbox COMMAND conversation_test_event_inbox)
+
+# Actual controlled close implementation with synthetic transport/task boundary.
+add_executable(conversation_test_controlled_close test_controlled_close.cpp
+    ${CONVERSATION_ROOT}/openai_realtime_client.cpp ${CONVERSATION_ROOT}/base64.cpp)
+target_include_directories(conversation_test_controlled_close PRIVATE stubs ${CONVERSATION_ROOT}
+    ${CONVERSATION_ROOT}/include ${CONVERSATION_ROOT}/../tl_expected/expected/include ${MBEDTLS_INCLUDE_DIR})
+target_compile_definitions(conversation_test_controlled_close PRIVATE CONFIG_STACKCHAN_CONV_WS_RX_BUFFER=131072)
+target_link_libraries(conversation_test_controlled_close PRIVATE cjson_host ${MBEDCRYPTO_LIBRARY} Threads::Threads)
+add_test(NAME controlled_close COMMAND conversation_test_controlled_close)
+
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+set(CLOSE_FIXTURE "${CMAKE_CURRENT_BINARY_DIR}/generated_controlled_close.inc")
+add_custom_command(OUTPUT "${CLOSE_FIXTURE}"
+    BYPRODUCTS "${CMAKE_CURRENT_BINARY_DIR}/generated_local_speech_guard.inc"
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/generate_controlled_close_fixture.py"
+        "${CONVERSATION_ROOT}/../../main/conversation_task.cpp" "${CLOSE_FIXTURE}"
+    DEPENDS generate_controlled_close_fixture.py "${CONVERSATION_ROOT}/../../main/conversation_task.cpp"
+        "${CONVERSATION_ROOT}/../../main/settings_sinks.cpp" "${CONVERSATION_ROOT}/../../main/app_main.cpp")
+add_executable(conversation_test_close_monitor test_close_monitor.cpp "${CLOSE_FIXTURE}")
+target_include_directories(conversation_test_close_monitor PRIVATE ${CONVERSATION_ROOT}/include
+    ${CONVERSATION_ROOT}/../tl_expected/expected/include "${CMAKE_CURRENT_BINARY_DIR}")
+target_link_libraries(conversation_test_close_monitor PRIVATE Threads::Threads)
+target_compile_options(conversation_test_close_monitor PRIVATE -Wall -Wextra -Werror)
+add_test(NAME close_monitor COMMAND conversation_test_close_monitor)
+set_tests_properties(controlled_close close_monitor PROPERTIES TIMEOUT 15)
+
+add_executable(conversation_test_session_operation_gate test_session_operation_gate.cpp)
+target_include_directories(conversation_test_session_operation_gate PRIVATE ${CONVERSATION_ROOT}/include)
+target_link_libraries(conversation_test_session_operation_gate PRIVATE Threads::Threads)
+target_compile_options(conversation_test_session_operation_gate PRIVATE -Wall -Wextra -Werror)
+add_test(NAME session_operation_gate COMMAND conversation_test_session_operation_gate)
+set_tests_properties(session_operation_gate PROPERTIES TIMEOUT 15)
+
+add_executable(conversation_test_session_operation_gate_esp_boundary test_session_operation_gate.cpp)
+target_include_directories(conversation_test_session_operation_gate_esp_boundary PRIVATE
+    policy_esp_stubs ${CONVERSATION_ROOT}/include)
+target_compile_definitions(conversation_test_session_operation_gate_esp_boundary PRIVATE ESP_PLATFORM=1)
+target_link_libraries(conversation_test_session_operation_gate_esp_boundary PRIVATE Threads::Threads)
+target_compile_options(conversation_test_session_operation_gate_esp_boundary PRIVATE -Wall -Wextra -Werror)
+add_test(NAME session_operation_gate_esp_boundary COMMAND conversation_test_session_operation_gate_esp_boundary)
+set_tests_properties(session_operation_gate_esp_boundary PROPERTIES TIMEOUT 15)
+
+# The production scope implementation is shared with the firmware overlay.
+get_filename_component(STOPWATCH_PROJECT_ROOT "${CONVERSATION_ROOT}/../.." ABSOLUTE)
+set(STOPWATCH_SCOPE_ROOT "${STOPWATCH_PROJECT_ROOT}/patches/stopwatch-controlled-close/idf/candidate/components/esp-tls")
+add_library(conversation_scope_host STATIC "${STOPWATCH_SCOPE_ROOT}/esp_tls_scope.c")
+target_compile_features(conversation_scope_host PUBLIC c_std_11)
+target_include_directories(conversation_scope_host PUBLIC "${STOPWATCH_SCOPE_ROOT}")
+foreach(target conversation_test_realtime_client conversation_test_saved_agent conversation_test_controlled_close)
+    target_link_libraries(${target} PRIVATE conversation_scope_host)
+endforeach()
+add_subdirectory("${STOPWATCH_PROJECT_ROOT}/tools/controlled-close-tests" "${CMAKE_CURRENT_BINARY_DIR}/controlled-close-tests")

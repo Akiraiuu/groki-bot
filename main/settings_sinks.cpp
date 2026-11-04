@@ -7,6 +7,7 @@
 #include "hmm_voice.hpp"
 
 #include <cstdio>
+#include <atomic>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -36,6 +37,7 @@ namespace {
 constexpr const char* kTag = "stackchan";
 
 SharedState* g_state = nullptr;
+std::atomic<bool> g_exclusive_voice_audio{false};
 
 // Per-board factory speaker volume (the "100 %" reference for the user
 // gain). Captured once at boot; the live-apply sink multiplies by the
@@ -186,6 +188,11 @@ std::uint16_t read_speaker_volume_pct()
 // either by the worker or on task-create failure here.
 void start_say_worker(std::string_view kana_utf8)
 {
+    if(g_exclusive_voice_audio.load(std::memory_order_acquire)) {
+        ESP_LOGW(kTag,"local speech unavailable while scoped voice mode owns audio");
+        if(g_state!=nullptr) g_state->set_balloon_text("语音模式下暂不提供本地朗读",3000);
+        return;
+    }
     auto* owned = new std::string{kana_utf8};
     // 12 KiB stack in PSRAM. See the long rationale on the original
     // /mcp/say wiring (steady-state internal-RAM largest is ~10 KiB after
@@ -334,6 +341,11 @@ void on_config_change(const stackchan::config::registry::SettingDescriptor& d,
 }
 
 }  // namespace
+
+void set_exclusive_voice_audio(bool enabled)
+{
+    g_exclusive_voice_audio.store(enabled,std::memory_order_release);
+}
 
 void attach_state(SharedState& state)
 {

@@ -1,3 +1,5 @@
 dependencies:
-  espressif/esp_websocket_client: "^1.2.3"
+  espressif/esp_websocket_client:
+    version: "1.8.0"
+    override_path: "../../build-inputs/esp_websocket_client"
   espressif/esp_audio_codec: "^2.5.0"

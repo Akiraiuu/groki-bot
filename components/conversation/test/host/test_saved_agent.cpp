@@ -32,6 +32,10 @@ void receive_fragmented(std::string json, std::size_t step = 8192) {
         host_socket->callback(host_socket->arg, nullptr, WEBSOCKET_EVENT_DATA, &data);
     }
 }
+static bool ticket_allowed=true;
+static auto ticket_hold=std::make_shared<int>(1);
+static std::uint32_t ticket_generation=0;
+static TicketPreparationPermit ticket_permit(){return {60000000,[]{return ticket_allowed;},ticket_hold,++ticket_generation};}
 int main() {
     auto* audio_event = cJSON_Parse(confirmed.c_str());
     auto* audio_session = cJSON_GetObjectItemCaseSensitive(audio_event, "session");
@@ -50,21 +54,21 @@ int main() {
         assert(!parse_agent_ticket(bad.data(), bad.size(), now));
     }
     host_http_body = json;
-    auto ticket = fetch_agent_ticket(kSavedAgentTokenUrl, std::string(43, 'd'));
+    auto ticket = fetch_agent_ticket(kSavedAgentTokenUrl, std::string(43, 'd'), ticket_permit());
     assert(ticket && ticket->agent_id == "agent_test_only");
     assert(host_http.config.disable_auto_redirect && host_http.config.max_authorization_retries == -1);
     assert(host_http.config.crt_bundle_attach && host_http.config.timeout_ms == 15000);
     assert(host_http_authorization == "Bearer " + std::string(43, 'd'));
     assert(host_http_cleanups == 1);
     const auto calls = host_http_perform_calls;
-    assert(!fetch_agent_ticket("https://elsewhere.example", std::string(43, 'd')));
-    assert(!fetch_agent_ticket(kSavedAgentTokenUrl, "xai-long-term-key"));
+    assert(!fetch_agent_ticket("https://elsewhere.example", std::string(43, 'd'), ticket_permit()));
+    assert(!fetch_agent_ticket(kSavedAgentTokenUrl, "xai-long-term-key", ticket_permit()));
     assert(host_http_perform_calls == calls);
     host_http_status = 302;
-    assert(!fetch_agent_ticket(kSavedAgentTokenUrl, std::string(43, 'd')));
+    assert(!fetch_agent_ticket(kSavedAgentTokenUrl, std::string(43, 'd'), ticket_permit()));
     host_http_status = 200;
     host_http_body = std::string(9000, 'x');
-    assert(!fetch_agent_ticket(kSavedAgentTokenUrl, std::string(43, 'd')));
+    assert(!fetch_agent_ticket(kSavedAgentTokenUrl, std::string(43, 'd'), ticket_permit()));
 
     // A timezone or stale-RTC offset must not reject a fresh ticket from a
     // certificate-verified broker. Keep the same expiry bounds against Date.
@@ -83,29 +87,29 @@ int main() {
         host_http_headers = {{"Date", date}};
         host_http_body = ticket_json("agent_test_only", remote_now + 300);
         assert(!parse_agent_ticket(host_http_body.data(), host_http_body.size(), std::time(nullptr)));
-        assert(fetch_agent_ticket(kSavedAgentTokenUrl, std::string(43, 'd')));
+        assert(fetch_agent_ticket(kSavedAgentTokenUrl, std::string(43, 'd'), ticket_permit()));
         host_http_status = 302;
-        assert(!fetch_agent_ticket(kSavedAgentTokenUrl, std::string(43, 'd')));
+        assert(!fetch_agent_ticket(kSavedAgentTokenUrl, std::string(43, 'd'), ticket_permit()));
         host_http_status = 200;
     }
     host_http_headers = {{"dAtE", "Wed, 21 Oct 2026 00:49:51 GMT"}};
     host_http_body = ticket_json("agent_test_only", *server_now + 300);
-    assert(fetch_agent_ticket(kSavedAgentTokenUrl, std::string(43, 'd')));
+    assert(fetch_agent_ticket(kSavedAgentTokenUrl, std::string(43, 'd'), ticket_permit()));
     host_http_body = ticket_json("agent_test_only", *server_now - 1);
-    assert(!fetch_agent_ticket(kSavedAgentTokenUrl, std::string(43, 'd')));
+    assert(!fetch_agent_ticket(kSavedAgentTokenUrl, std::string(43, 'd'), ticket_permit()));
     host_http_body = ticket_json("agent_test_only", *server_now + 3600);
-    assert(!fetch_agent_ticket(kSavedAgentTokenUrl, std::string(43, 'd')));
+    assert(!fetch_agent_ticket(kSavedAgentTokenUrl, std::string(43, 'd'), ticket_permit()));
     host_http_body = ticket_json("agent_test_only", *server_now + 300);
     host_http_headers.push_back({"Date", "Wed, 21 Oct 2026 00:49:51 GMT"});
-    assert(!fetch_agent_ticket(kSavedAgentTokenUrl, std::string(43, 'd')));
+    assert(!fetch_agent_ticket(kSavedAgentTokenUrl, std::string(43, 'd'), ticket_permit()));
     host_http_headers = {{"Date", "invalid"}};
-    assert(!fetch_agent_ticket(kSavedAgentTokenUrl, std::string(43, 'd')));
+    assert(!fetch_agent_ticket(kSavedAgentTokenUrl, std::string(43, 'd'), ticket_permit()));
     host_http_headers.clear();
 
     OpenAiRealtimeClient client("fake-ephemeral-token", RealtimeBackend::Xai);
     std::vector<ConversationEvent> events;
     client.set_event_callback([&](const auto& e) {events.push_back(e);});
-    ConversationConfig cfg;
+    ConversationConfig cfg;cfg.session_deadline_us=60000000;
     cfg.agent_id = "agent_test_only";
     cfg.extra_headers = "Authorization: Bearer must-not-replace-token";
     assert(!client.start(cfg)); // A credential alone is not paid-test permission.
@@ -191,7 +195,7 @@ int main() {
     assert(!client.begin_input_turn()); // Single-reply permission cannot reopen input.
     host_receive(R"({"type":"response.function_call_arguments.done","name":"x_search_arbitrary","call_id":"bad"})");
     assert(events.back().type == ConversationEventType::Error);
-    client.stop();
+    client.stop(); host_run_all_tasks();
 
     // An explicit same-name client declaration overrides native classification.
     assert(client.start(cfg)); host_connected(); host_receive(confirmed);
@@ -208,11 +212,11 @@ int main() {
     host_receive(text); cJSON_free(text); cJSON_Delete(root);
     host_receive(R"({"type":"response.function_call_arguments.done","name":"web_search","call_id":"custom"})");
     assert(events.back().type == ConversationEventType::Error);
-    client.stop();
+    client.stop(); host_run_all_tasks();
     assert(client.start(cfg)); host_connected(); host_receive(confirmed);
     host_receive(R"({"type":"session.updated","session":{"audio":{"output":{"format":{"type":"audio/pcm","rate":8000}}}}})");
     assert(client.state() == ConversationState::Error);
-    client.stop();
+    client.stop(); host_run_all_tasks();
     // Explicit multi-turn config can rearm only after a completed reply and
     // a finalized input, within the same still-live permission.
     cfg.allow_multiple_turns = true;
@@ -237,6 +241,31 @@ int main() {
     host_receive(R"({"type":"response.done","response":{"status":"completed"}})");
     permitted = false;
     assert(!client.begin_input_turn()); // Expired/stopped permission wins.
-    client.stop();
+    client.stop(); host_run_all_tasks();
+
+    host_http_headers.clear();host_http_status=200;host_http_body=ticket_json();
+    auto before_prepare=host_http_perform_calls;
+    auto denied=ticket_permit();denied.allowed={};
+    assert(!fetch_agent_ticket(kSavedAgentTokenUrl,std::string(43,'d'),denied));
+    assert(host_http_perform_calls==before_prepare);
+    denied={};
+    host_http_perform_hook=+[]{ticket_allowed=false;};
+    assert(!fetch_agent_ticket(kSavedAgentTokenUrl,std::string(43,'d'),ticket_permit()));
+    assert(ticket_hold.use_count()==1); // Known closed response releases its lease.
+    ticket_allowed=true;host_http_perform_hook=+[]{host_clock_us=60000000;};
+    assert(!fetch_agent_ticket(kSavedAgentTokenUrl,std::string(43,'d'),ticket_permit()));
+    assert(ticket_hold.use_count()==1);
+    host_clock_us=1000000;host_http_perform_hook=nullptr;
+    {const auto once=ticket_permit();assert(fetch_agent_ticket(kSavedAgentTokenUrl,std::string(43,'d'),once));
+    const auto calls_once=host_http_perform_calls;
+    assert(!fetch_agent_ticket(kSavedAgentTokenUrl,std::string(43,'d'),once));assert(host_http_perform_calls==calls_once);}
+    {auto high=ticket_permit();high.generation=0x12345678;assert(fetch_agent_ticket(kSavedAgentTokenUrl,std::string(43,'d'),high));
+    assert(fetch_agent_ticket(kSavedAgentTokenUrl,std::string(43,'d'),ticket_permit()));} // Approval IDs can be reseeded; magnitude is not permission.
+    host_http_cleanup_result=ESP_FAIL;
+    assert(!fetch_agent_ticket(kSavedAgentTokenUrl,std::string(43,'d'),ticket_permit()));
+    assert(ticket_hold.use_count()>1); // Uncertain close owns body and preparation lease.
+    before_prepare=host_http_perform_calls;const auto before_cleanup=host_http_cleanups;
+    assert(!fetch_agent_ticket(kSavedAgentTokenUrl,std::string(43,'d'),ticket_permit()));
+    assert(host_http_perform_calls==before_prepare && host_http_cleanups==before_cleanup); // No retry.
 
 }

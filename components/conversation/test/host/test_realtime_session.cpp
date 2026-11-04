@@ -13,7 +13,7 @@ void str(const cJSON* o, const char* k, const char* v) {
     assert(cJSON_IsString(f) && std::strcmp(f->valuestring, v) == 0);
 }
 int main() {
-    ConversationConfig cfg;
+    ConversationConfig cfg;cfg.session_deadline_us=60000000;
     cfg.model = "grok-voice-latest";
     cfg.voice = "eve";
     cfg.instructions = "请用中文简短回答。";

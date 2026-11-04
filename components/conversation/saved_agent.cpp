@@ -6,13 +6,37 @@
 #include <esp_log.h>
 #include <esp_http_client.h>
 #include <esp_crt_bundle.h>
+#include <esp_timer.h>
+#include "esp_tls_scope.h"
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+#include <atomic>
+#include <memory>
+#include <new>
+#include <algorithm>
 
 namespace stackchan::conversation {
 namespace {
 constexpr const char* kTag = "saved-agent";
 struct Body { std::string text, date; bool overflow = false, date_seen = false, invalid_date = false; };
+struct TicketOperation {
+    Body body;TicketPreparationPermit permit;esp_tls_scope scope{};
+    esp_http_client_handle_t client{};std::int64_t request_end{};
+    TicketOperation*retained_next{};
+    bool allowed()const {const auto now=esp_timer_get_time();return now>=0&&now<request_end&&permit.allowed&&permit.allowed();}
+};
+static std::atomic<bool> ticket_operation_busy{false};
+static std::atomic<std::uint32_t> last_ticket_generation{0};
+static std::atomic<TicketOperation*> retained_operations{nullptr};
+static void retain(TicketOperation*owner){
+    auto*previous=retained_operations.load(std::memory_order_acquire);
+    do{owner->retained_next=previous;}while(!retained_operations.compare_exchange_weak(previous,owner,std::memory_order_acq_rel,std::memory_order_acquire));
+    // Busy stays true. Unknown owner/lease never admits a replacement attempt.
+}
 esp_err_t receive_body(esp_http_client_event_t* event) {
-    auto& body = *static_cast<Body*>(event->user_data);
+    auto& owner=*static_cast<TicketOperation*>(event->user_data);
+    if(!owner.allowed())return ESP_FAIL;
+    auto& body=owner.body;
     if (event->event_id == HTTP_EVENT_ON_HEADER && event->header_key) {
         const std::string_view key(event->header_key);
         if (key.size() == 4 && (key[0] == 'D' || key[0] == 'd') &&
@@ -32,7 +56,10 @@ esp_err_t receive_body(esp_http_client_event_t* event) {
 }
 }
 tl::expected<AgentTicket, ConversationError> fetch_agent_ticket(
-        const std::string& url, const std::string& device_token) {
+        const std::string& url, const std::string& device_token, const TicketPreparationPermit& permit) {
+    const auto scope_start=esp_timer_get_time();
+    if(!permit.generation || !permit.allowed || !permit.operation_lease || !permit.allowed() || scope_start<0 || permit.deadline_us<=scope_start)
+        return tl::unexpected{ConversationError::InvalidState};
     if (url != kSavedAgentTokenUrl || !base64url_id(device_token, 43, 128)) {
         ESP_LOGW(kTag, "configuration rejected (url_match=%d, device_credential_valid=%d)",
                  url == kSavedAgentTokenUrl, base64url_id(device_token, 43, 128));
@@ -43,25 +70,61 @@ tl::expected<AgentTicket, ConversationError> fetch_agent_ticket(
         ESP_LOGW(kTag, "waiting for a valid system clock before certificate verification");
         return tl::unexpected{ConversationError::Timeout};
     }
-    Body body;
+    bool expected=false;
+    if(!ticket_operation_busy.compare_exchange_strong(expected,true,std::memory_order_acq_rel))return tl::unexpected{ConversationError::InvalidState};
+    if(permit.generation==last_ticket_generation.load(std::memory_order_acquire)) {
+        ticket_operation_busy.store(false,std::memory_order_release);return tl::unexpected{ConversationError::InvalidState};
+    }
+    last_ticket_generation.store(permit.generation,std::memory_order_release);
+    std::unique_ptr<TicketOperation> owner{new(std::nothrow) TicketOperation{}};
+    if(!owner){ticket_operation_busy.store(false,std::memory_order_release);return tl::unexpected{ConversationError::OutOfMemory};}
+    owner->permit=permit;
+    const auto request_budget=std::min<std::int64_t>(15000000,permit.deadline_us-scope_start);
+    owner->request_end=scope_start+request_budget;
+    auto& body=owner->body;
+    if(!tls_scope_init(&owner->scope,1,scope_start,owner->request_end) ||
+       !tls_scope_set_permission(&owner->scope,1,+[](void*context){return static_cast<TicketOperation*>(context)->allowed();},owner.get())) {
+        ticket_operation_busy.store(false,std::memory_order_release);return tl::unexpected{ConversationError::InvalidState};
+    }
     esp_http_client_config_t config{};
     config.url = url.c_str();
     config.method = HTTP_METHOD_POST;
-    config.timeout_ms = 15000;
+    config.timeout_ms = static_cast<int>(std::max<std::int64_t>(1,request_budget/1000));
+    config.bounded_scope=&owner->scope;config.bounded_generation=1;
     config.disable_auto_redirect = true;
     config.max_authorization_retries = -1;
     config.crt_bundle_attach = esp_crt_bundle_attach;
     config.event_handler = receive_body;
-    config.user_data = &body;
-    auto client = esp_http_client_init(&config);
-    if (!client) return tl::unexpected{ConversationError::TransportInit};
+    config.user_data = owner.get();
+    auto client = esp_http_client_init(&config);owner->client=client;
+    if(!client){
+        int fd=-1;const auto claim=tls_scope_close_claim(&owner->scope,1,&fd);
+        if((claim!=TLS_SCOPE_ALREADY && (claim!=TLS_SCOPE_OK || tls_scope_close_finish(&owner->scope,1,fd,fd<0?0:-1)!=TLS_SCOPE_OK)) || !tls_scope_release(&owner->scope,1)) {
+            retain(owner.release());return tl::unexpected{ConversationError::TransportInit};
+        }
+        ticket_operation_busy.store(false,std::memory_order_release);return tl::unexpected{ConversationError::TransportInit};
+    }
     const std::string authorization = "Bearer " + device_token;
     auto result = esp_http_client_set_header(client, "Authorization", authorization.c_str());
     if (result == ESP_OK) result = esp_http_client_set_post_field(client, "", 0);
     const auto started = std::chrono::steady_clock::now();
-    if (result == ESP_OK) result = esp_http_client_perform(client);
+    if(result==ESP_OK && owner->allowed())result=esp_http_client_perform(client);
+    else result=ESP_FAIL;
     const int status = esp_http_client_get_status_code(client);
-    esp_http_client_cleanup(client); // release HTTPS/TLS before the voice WebSocket
+    tls_scope_cancel(&owner->scope,1);
+    for(;;){
+        const auto closed=esp_http_client_cleanup(client);
+        if(closed==ESP_OK){owner->client=nullptr;break;}
+        if(closed!=-2 || esp_timer_get_time()>=permit.deadline_us){
+            retain(owner.release());return tl::unexpected{ConversationError::TransportInit};
+        }
+        vTaskDelay(1); // BUSY continuation only; never retry a real close failure.
+    }
+    if(!tls_scope_observe(&owner->scope,1,esp_timer_get_time()).close_confirmed || !tls_scope_release(&owner->scope,1)) {
+        retain(owner.release());return tl::unexpected{ConversationError::TransportInit};
+    }
+    ticket_operation_busy.store(false,std::memory_order_release);
+    if(!owner->allowed())return tl::unexpected{ConversationError::Timeout};
     if (result != ESP_OK || body.overflow) return tl::unexpected{ConversationError::TransportInit};
     if (status != 200) return tl::unexpected{ConversationError::ServerError};
     const auto local_now = std::time(nullptr);
@@ -85,6 +148,7 @@ tl::expected<AgentTicket, ConversationError> fetch_agent_ticket(
     if (!ticket) ESP_LOGW(kTag, "ticket rejected (bytes=%u, broker_date=%d, reference_epoch=%lld)",
                           static_cast<unsigned>(body.text.size()), body.date_seen, static_cast<long long>(reference_now));
     if (ticket && ticket->token == device_token) return tl::unexpected{ConversationError::ProtocolError};
+    if(!owner->allowed())return tl::unexpected{ConversationError::Timeout};
     return ticket;
 }
 }

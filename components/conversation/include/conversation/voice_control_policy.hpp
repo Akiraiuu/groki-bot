@@ -190,9 +190,10 @@ class CloseOwnershipPolicy {
 public:
     bool begin_close(std::uint32_t generation, std::uint64_t now_us,
                       std::uint64_t deadline_us) noexcept {
-        if (!generation || generation == generation_ || deadline_us <= now_us || (owned_ && !destroy_owner_allowed())) return false;
+        if (!generation || generation == generation_ || !deadline_us || (owned_ && !destroy_owner_allowed())) return false;
         generation_ = generation; deadline_us_ = deadline_us; last_now_us_ = now_us;
-        facts_ = {}; exceeded_ = false; owned_ = true; return true;
+        // Closing must still be tracked if the original grant already expired.
+        facts_ = {}; exceeded_ = now_us >= deadline_us; owned_ = true; return true;
     }
     bool observe(std::uint32_t generation, std::uint64_t now_us, CloseFacts facts) noexcept {
         if (!owned_ || generation != generation_ || now_us < last_now_us_) return false;

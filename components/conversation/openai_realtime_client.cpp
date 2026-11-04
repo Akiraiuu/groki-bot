@@ -122,10 +122,17 @@ public:
     explicit Impl(std::string api_key, RealtimeBackend backend)
         : api_key_{std::move(api_key)}, backend_{backend} {}
 
-    ~Impl() { teardown(); }
+    ~Impl() { if (backend_ != RealtimeBackend::Xai) teardown(); }
 
     tl::expected<void, ConversationError> start(const ConversationConfig& config)
     {
+        if (close_requested_.load(std::memory_order_acquire)) {
+            if (!owner_release_allowed()) return tl::unexpected{ConversationError::InvalidState};
+            close_requested_.store(false, std::memory_order_release);
+            close_flags_.store(0, std::memory_order_relaxed);
+            close_failure_.store(CloseFailure::None, std::memory_order_relaxed);
+            close_stage_.store(TransportCloseStage::Inactive, std::memory_order_relaxed);
+        }
         if (client_ != nullptr) {
             return tl::unexpected{ConversationError::InvalidState};
         }
@@ -137,6 +144,19 @@ public:
         }
         if (!config_.agent_id.empty() && (!config_.session_permitted || !config_.session_permitted())) {
             return tl::unexpected{ConversationError::InvalidState};
+        }
+        if(backend_==RealtimeBackend::Xai) {
+            const auto now=esp_timer_get_time();
+            if(config_.session_deadline_us<=now || scope_generation_==UINT32_MAX)
+                return tl::unexpected{ConversationError::InvalidState};
+            tls_scope_.reset(new(std::nothrow) esp_tls_scope{});
+            if(!tls_scope_)return tl::unexpected{ConversationError::OutOfMemory};
+            ++scope_generation_;
+            if(!tls_scope_init(tls_scope_.get(),scope_generation_,now,config_.session_deadline_us))
+                return tl::unexpected{ConversationError::InvalidState};
+            if(!tls_scope_set_permission(tls_scope_.get(),scope_generation_,+[](void*owner) {
+                    return static_cast<Impl*>(owner)->session_permitted();
+                },this))return tl::unexpected{ConversationError::InvalidState};
         }
         saved_confirmations_ = 0;
         server_web_ = server_x_ = server_file_ = false;
@@ -179,6 +199,11 @@ public:
         cfg.task_stack = 6144;
         cfg.task_prio = 5;
         cfg.disable_auto_reconnect = true;
+        if(backend_==RealtimeBackend::Xai) {
+            cfg.enable_bounded_stop=true;cfg.enable_close_reconnect=false;
+            cfg.bounded_scope=tls_scope_.get();cfg.bounded_generation=scope_generation_;
+            cfg.bounded_deadline_us=config_.session_deadline_us;
+        }
         cfg.network_timeout_ms = 10000;
         // Active keepalive: client sends a WebSocket PING every 15 s; if no
         // PONG arrives within 25 s the client drops the connection (PONGs
@@ -240,10 +265,65 @@ public:
             teardown();
             return tl::unexpected{ConversationError::TransportInit};
         }
+        ws_started_ = true;
         return {};
     }
 
     void stop() { teardown(); }
+
+    // Application has revoked permission and will make no more client calls.
+    // This entry never calls SDK stop/destroy and never waits for a worker.
+    void begin_controlled_close() {
+        if (backend_ != RealtimeBackend::Xai) return;
+        if (close_requested_.exchange(true, std::memory_order_acq_rel)) return;
+        // Cancel BIO waits before waiting for any blocked producer or SDK lock.
+        if(client_) {
+            if(esp_websocket_client_request_stop(client_)!=ESP_OK)note_close_failure(CloseFailure::StopFailed);
+        }else if(tls_scope_) {
+            if(tls_scope_cancel(tls_scope_.get(),scope_generation_)!=TLS_SCOPE_OK)note_close_failure(CloseFailure::Invariant);
+        }
+        close_stage_.store(TransportCloseStage::AwaitSender, std::memory_order_release);
+        input_finished_.store(true, std::memory_order_release);
+        sender_should_exit_.store(true, std::memory_order_release);
+        if (audio_tx_queue_) {
+            AudioChunk* sentinel=nullptr;
+            (void)xQueueSend(audio_tx_queue_, &sentinel, 0);
+        }
+        if (!client_ && !tls_scope_ && !audio_tx_queue_ && !rx_buffer_ && !sender_task_) {
+            close_stage_.store(TransportCloseStage::Finished, std::memory_order_relaxed);
+            close_flags_.store(SenderFinished|TransportClosed|CallbacksQuiesced|WorkerFinished,
+                               std::memory_order_release);
+            return;
+        }
+        TaskHandle_t task=nullptr;
+        if (xTaskCreatePinnedToCoreWithCaps(&Impl::close_trampoline, "rt_close", 4096,
+                this, kSenderTaskPrio, &task, kSenderTaskCore, MALLOC_CAP_SPIRAM) != pdPASS) {
+            note_close_failure(CloseFailure::WorkerStart);
+            close_stage_.store(TransportCloseStage::Failed, std::memory_order_release);
+            close_flags_.fetch_or(WorkerFinished, std::memory_order_release);
+        }
+    }
+    ControlledCloseSnapshot controlled_close_snapshot() const {
+        const auto flags=close_flags_.load(std::memory_order_acquire);
+        return {backend_==RealtimeBackend::Xai, close_requested_.load(std::memory_order_acquire),
+            sender_finished_.load(std::memory_order_acquire), bool(flags&TransportClosed),
+            bool(flags&CallbacksQuiesced), bool(flags&WorkerFinished),
+            close_failure_.load(std::memory_order_acquire),close_stage_.load(std::memory_order_acquire)};
+    }
+    bool owner_release_allowed() const {
+        const auto s=controlled_close_snapshot();
+        return s.requested && s.sender_finished && s.transport_closed && s.callbacks_quiesced &&
+               s.worker_finished && s.failure==CloseFailure::None;
+    }
+    void retain_unclosed_owner() {
+        // Process-lifetime quarantine, with no new allocation. A late worker or
+        // SDK callback must keep its exact owner; timeout is not a free permit.
+        // Normal coordinator flow holds the client itself and never uses this.
+        static std::atomic<Impl*> retained{nullptr};
+        auto* previous=retained.load(std::memory_order_acquire);
+        do { retained_next_=previous; }
+        while (!retained.compare_exchange_weak(previous,this,std::memory_order_acq_rel,std::memory_order_acquire));
+    }
 
     tl::expected<void, ConversationError> push_audio(std::span<const std::int16_t> pcm)
     {
@@ -416,6 +496,7 @@ private:
 
     void teardown()
     {
+        if (backend_ == RealtimeBackend::Xai) { begin_controlled_close(); return; }
         // Stop the sender first so it can't issue more writes against a
         // client we're about to destroy. Push a nullptr sentinel to unblock
         // a sender waiting on xQueueReceive.
@@ -458,6 +539,88 @@ private:
         rx_capacity_ = 0;
         rx_len_ = 0;
         set_state(ConversationState::Idle);
+    }
+
+    static void close_trampoline(void* arg) {
+        auto* self=static_cast<Impl*>(arg);
+        self->close_worker();
+        // Last access to the owner; callers may release it after this ack.
+        self->close_flags_.fetch_or(WorkerFinished, std::memory_order_release);
+        vTaskDeleteWithCaps(nullptr);
+    }
+    void note_close_failure(CloseFailure failure) {
+        auto expected=CloseFailure::None;
+        close_failure_.compare_exchange_strong(expected,failure,std::memory_order_acq_rel,std::memory_order_acquire);
+    }
+    bool close_time_left() {
+        const auto now=esp_timer_get_time();
+        return now>=0 && now<config_.session_deadline_us;
+    }
+    void close_worker() {
+        while (!sender_finished_.load(std::memory_order_acquire)) {
+            if(!close_time_left()) {note_close_failure(CloseFailure::Deadline);close_stage_.store(TransportCloseStage::Failed,std::memory_order_release);return;}
+            vTaskDelay(1); // One real tick, including configurations with a 10ms tick.
+        }
+        close_flags_.fetch_or(SenderFinished, std::memory_order_release);
+        if (client_) {
+            close_stage_.store(TransportCloseStage::Stop, std::memory_order_release);
+            const auto rc=esp_websocket_client_stop_until(client_,config_.session_deadline_us);
+            if(!esp_websocket_client_stop_observed(client_)) {
+                note_close_failure(rc==ESP_ERR_TIMEOUT?CloseFailure::Deadline:CloseFailure::StopFailed);
+                close_stage_.store(TransportCloseStage::Failed,std::memory_order_release);return;
+            }
+            for(;;) {
+                const auto result=esp_websocket_client_finish_cleanup(client_);
+                if(result==ESP_OK)break;
+                if(result!=ESP_WEBSOCKET_CLOSE_PENDING || !close_time_left()) {
+                    note_close_failure(result==ESP_WEBSOCKET_CLOSE_PENDING?CloseFailure::Deadline:CloseFailure::StopFailed);
+                    close_stage_.store(TransportCloseStage::Failed,std::memory_order_release);return;
+                }
+                vTaskDelay(1); // Continue BUSY cleanup; no reconnect or failed-close retry.
+            }
+            if(!esp_websocket_client_transport_close_confirmed(client_)) {
+                note_close_failure(CloseFailure::Invariant);close_stage_.store(TransportCloseStage::Failed,std::memory_order_release);return;
+            }
+            close_flags_.fetch_or(TransportClosed,std::memory_order_release);
+            if(!close_time_left())note_close_failure(CloseFailure::Deadline);
+            close_stage_.store(TransportCloseStage::Destroy, std::memory_order_release);
+            if(esp_websocket_client_destroy(client_)!=ESP_OK) {
+                note_close_failure(CloseFailure::DestroyFailed);close_stage_.store(TransportCloseStage::Failed,std::memory_order_release);return;
+            }
+            client_=nullptr;
+        }else if(tls_scope_) {
+            int fd=-1;const auto claim=tls_scope_close_claim(tls_scope_.get(),scope_generation_,&fd);
+            if(claim!=TLS_SCOPE_ALREADY && (claim!=TLS_SCOPE_OK || tls_scope_close_finish(tls_scope_.get(),scope_generation_,fd,fd<0?0:-1)!=TLS_SCOPE_OK)) {
+                note_close_failure(CloseFailure::Invariant);close_stage_.store(TransportCloseStage::Failed,std::memory_order_release);return;
+            }
+            close_flags_.fetch_or(TransportClosed,std::memory_order_release);
+        }
+        if(tls_scope_ && !tls_scope_release(tls_scope_.get(),scope_generation_)) {
+            note_close_failure(CloseFailure::Invariant);close_stage_.store(TransportCloseStage::Failed,std::memory_order_release);return;
+        }
+        // Pinned SDK stop/destroy return only after its synchronous event loop
+        // and final transport access. No callback registration is reused.
+        if (callbacks_inflight_.load(std::memory_order_acquire)!=0) {
+            note_close_failure(CloseFailure::Invariant);
+            close_stage_.store(TransportCloseStage::Failed, std::memory_order_release);
+            return;
+        }
+        close_flags_.fetch_or(TransportClosed|CallbacksQuiesced, std::memory_order_release);
+        close_stage_.store(TransportCloseStage::ReleaseBuffers, std::memory_order_release);
+        sender_task_=nullptr;
+        if (audio_tx_queue_) {
+            AudioChunk* chunk=nullptr;
+            while (xQueueReceive(audio_tx_queue_, &chunk, 0)==pdTRUE)
+                if (chunk) heap_caps_free(chunk);
+            vQueueDelete(audio_tx_queue_); audio_tx_queue_=nullptr;
+        }
+        if (rx_buffer_) { heap_caps_free(rx_buffer_); rx_buffer_=nullptr; }
+        b64_scratch_.clear(); b64_scratch_.shrink_to_fit();
+        json_scratch_.clear(); json_scratch_.shrink_to_fit();
+        rx_capacity_=rx_len_=0;
+        ws_started_=false;
+        state_.store(ConversationState::Idle, std::memory_order_relaxed);
+        close_stage_.store(TransportCloseStage::Finished, std::memory_order_release);
     }
 
     // ---- audio sender task -------------------------------------------------
@@ -565,6 +728,7 @@ private:
 
     void emit(const ConversationEvent& ev)
     {
+        if (close_requested_.load(std::memory_order_acquire)) return;
         // A final, nonblank transcript proves server VAD has finalized input.
         // Stop queued microphone/silence writes before receiving the reply.
         // Raw VAD boundaries and blank transcripts MUST NOT close this gate.
@@ -591,7 +755,11 @@ private:
 
     static void websocket_event_trampoline(void* arg, esp_event_base_t /*base*/, std::int32_t event_id, void* data)
     {
-        static_cast<Impl*>(arg)->on_websocket_event(event_id, static_cast<esp_websocket_event_data_t*>(data));
+        auto* self=static_cast<Impl*>(arg);
+        self->callbacks_inflight_.fetch_add(1, std::memory_order_acq_rel);
+        struct Exit { Impl* self; ~Exit() { self->callbacks_inflight_.fetch_sub(1, std::memory_order_release); } } exit{self};
+        if (self->close_requested_.load(std::memory_order_acquire)) return;
+        self->on_websocket_event(event_id, static_cast<esp_websocket_event_data_t*>(data));
     }
 
     void on_websocket_event(std::int32_t event_id, const esp_websocket_event_data_t* data)
@@ -682,7 +850,8 @@ private:
 
     bool session_permitted() const
     {
-        return config_.agent_id.empty() || (config_.session_permitted && config_.session_permitted());
+        return !close_requested_.load(std::memory_order_acquire) &&
+            (config_.agent_id.empty() || (config_.session_permitted && config_.session_permitted()));
     }
 
     bool send_json(cJSON* root)
@@ -965,6 +1134,14 @@ private:
 
     std::string api_key_;
     RealtimeBackend backend_;
+    Impl* retained_next_{nullptr}; // Intrusive root only for an unclosed owner.
+    std::unique_ptr<esp_tls_scope> tls_scope_;
+    std::uint32_t scope_generation_{0};
+    std::atomic<bool> close_requested_{false};
+    std::atomic<std::uint32_t> close_flags_{0}, callbacks_inflight_{0};
+    std::atomic<CloseFailure> close_failure_{CloseFailure::None};
+    std::atomic<TransportCloseStage> close_stage_{TransportCloseStage::Inactive};
+    bool ws_started_{false}; // Application writes before explicit quiescence.
     std::atomic<bool> discard_response_{false};
     ConversationConfig config_{};
     EventCallback event_callback_{};
@@ -1020,7 +1197,17 @@ OpenAiRealtimeClient::OpenAiRealtimeClient(std::string api_key, RealtimeBackend 
 {
 }
 
-OpenAiRealtimeClient::~OpenAiRealtimeClient() = default;
+OpenAiRealtimeClient::~OpenAiRealtimeClient() {
+    if (impl_->controlled_close_snapshot().supported) {
+        impl_->begin_controlled_close();
+        // Fail closed on misuse: never free a live SDK callback/worker owner.
+        // The coordinator normally retains this object until all real acks.
+        if (!impl_->owner_release_allowed()) {
+            impl_->retain_unclosed_owner();
+            (void)impl_.release();
+        }
+    }
+}
 
 void OpenAiRealtimeClient::set_event_callback(EventCallback cb)
 {
@@ -1040,6 +1227,10 @@ tl::expected<void, ConversationError> OpenAiRealtimeClient::start(const Conversa
 void OpenAiRealtimeClient::stop()
 {
     impl_->stop();
+}
+void OpenAiRealtimeClient::begin_controlled_close() { impl_->begin_controlled_close(); }
+ControlledCloseSnapshot OpenAiRealtimeClient::controlled_close_snapshot() const {
+    return impl_->controlled_close_snapshot();
 }
 
 tl::expected<void, ConversationError> OpenAiRealtimeClient::push_audio(std::span<const std::int16_t> pcm)

@@ -2,6 +2,8 @@
 #pragma once
 #include <cstdint>
 #include <mutex>
+#include <optional>
+#include "controlled_close.hpp"
 
 namespace stackchan::conversation {
 
@@ -17,9 +19,10 @@ public:
     enum class Phase { Idle, Queued, Running, Stopping };
     enum class Reason { None, Completed, Cancelled, Timeout, Error, Interrupted, IdleTimeout, Farewell, RoundLimit };
     enum class Fault { None, Unspecified, Unavailable, UnexpectedReply, LocalCapture, LocalPlayback,
-                       WakeRelease, Connect, Recovery, AudioUpload, Microphone, InputTurnReset, ConversationEvent, EventInbox };
+                       WakeRelease, Connect, Recovery, AudioUpload, Microphone, InputTurnReset, ConversationEvent, EventInbox, Shutdown };
     static const char* fault_name(Fault fault) {
         switch (fault) {
+        case Fault::Shutdown: return "shutdown";
         case Fault::EventInbox: return "event_inbox";
         case Fault::None: return "none";
         case Fault::Unspecified: return "unspecified";
@@ -49,6 +52,11 @@ public:
         std::int64_t idle_timeout_ms, idle_remaining_ms;
         Fault fault;
         int fault_detail; // ConversationError enum 0..7 only, -1 when unavailable.
+        bool close_required, close_verified, close_deadline_exceeded;
+        std::uint32_t close_facts;
+        CloseFailure close_failure;
+        SupervisionProgress supervision;
+        bool start_ready;
     };
     void set_available(bool value, std::uint32_t seed = 1) {
         std::lock_guard lock{mutex_};
@@ -57,21 +65,35 @@ public:
         if (value) approval_id_ = seed ? seed : 1;
         if (!value && phase_ != Phase::Idle) stop_locked(Reason::Error, Fault::Unavailable);
     }
+    // Boot-time opt-in. Accept paid grants only while the coordinator is between
+    // local operations; a grant cannot queue behind a blocked wake/model call.
+    void require_supervised_admission() {
+        std::lock_guard lock{mutex_};supervised_admission_required_=true;supervised_admission_ready_=false;
+    }
+    void set_supervised_admission(bool ready) {
+        std::lock_guard lock{mutex_};supervised_admission_ready_=ready && phase_==Phase::Idle;
+    }
     bool request_start(bool confirmed, std::int64_t now, std::uint32_t approval_id,
                        Mode mode = Mode::Paid, Profile profile = Profile::SingleReply) {
         std::lock_guard lock{mutex_};
         if (!confirmed || !available_ || phase_ != Phase::Idle || now < 0 || approval_id != approval_id_ ||
+            (mode==Mode::Paid && supervised_admission_required_ && !supervised_admission_ready_) ||
             (profile != Profile::SingleReply && profile != Profile::Dialogue) ||
             (mode != Mode::Paid && mode != Mode::Local) ||
             (mode == Mode::Local && profile != Profile::SingleReply)) return false;
         next_approval_locked();
         phase_ = Phase::Queued;
+        supervised_admission_ready_=false;
         reason_ = Reason::None;
         mode_ = mode;
         profile_ = profile;
         completed_rounds_ = 0;
         fault_ = Fault::None;
         fault_detail_ = -1;
+        close_required_ = close_verified_ = close_deadline_exceeded_ = false;
+        close_facts_ = 0;
+        close_failure_ = CloseFailure::None;
+        supervision_ = {};
         input_ready_ = reply_pending_ = false;
         waiting_since_ = -1;
         deadline_ = now + (mode == Mode::Paid ? limit_ms : local_limit_ms);
@@ -83,6 +105,17 @@ public:
         if (phase_ != Phase::Queued || mode_ != mode) return false;
         phase_ = Phase::Running;
         return true;
+    }
+    struct ClaimedScope { std::uint32_t generation;std::int64_t deadline_ms; };
+    std::optional<ClaimedScope> claim_supervised(std::int64_t now) {
+        std::lock_guard lock{mutex_};expire_locked(now);
+        if(phase_!=Phase::Queued || mode_!=Mode::Paid) return std::nullopt;
+        phase_=Phase::Running;close_required_=true;
+        return ClaimedScope{approval_id_,deadline_}; // One atomic claim, immutable identity/deadline.
+    }
+    void update_supervision(SupervisionProgress progress) {
+        std::lock_guard lock{mutex_};
+        if(close_required_ && (phase_==Phase::Running || phase_==Phase::Stopping)) supervision_=progress;
     }
     bool permitted(std::int64_t now, std::uint32_t expected_approval = 0) {
         std::lock_guard lock{mutex_};
@@ -139,10 +172,34 @@ public:
     }
     void finish() {
         std::lock_guard lock{mutex_};
+        if (close_required_ && !close_verified_) return;
         phase_ = Phase::Idle;
         input_ready_ = reply_pending_ = false;
         waiting_since_ = -1;
         deadline_ = 0;
+    }
+    void require_verified_close() {
+        std::lock_guard lock{mutex_};
+        if (mode_ == Mode::Paid && (phase_ == Phase::Running || phase_ == Phase::Stopping)) close_required_ = true;
+    }
+    std::int64_t scope_deadline_ms() {
+        std::lock_guard lock{mutex_};
+        return deadline_; // Exact original deadline, including after STOP/expiry.
+    }
+    void observe_close(std::uint32_t facts, bool missed_deadline, CloseFailure failure) {
+        std::lock_guard lock{mutex_};
+        if (!close_required_ || phase_ != Phase::Stopping) return;
+        close_facts_ |= facts & all_close_facts;
+        close_deadline_exceeded_ |= missed_deadline;
+        if (close_failure_ == CloseFailure::None) close_failure_ = failure;
+        if (close_deadline_exceeded_ && close_failure_ == CloseFailure::None)
+            close_failure_ = CloseFailure::Deadline;
+        if (close_failure_ != CloseFailure::None) {
+            available_ = false;
+            if (fault_ == Fault::None) { fault_ = Fault::Shutdown; fault_detail_ = -1; }
+        }
+        close_verified_ = close_facts_ == all_close_facts &&
+            !close_deadline_exceeded_ && close_failure_ == CloseFailure::None;
     }
     Snapshot snapshot(std::int64_t now) {
         std::lock_guard lock{mutex_};
@@ -152,7 +209,9 @@ public:
             ? dialogue_idle_ms - (now - waiting_since_) : 0;
         return {phase_, reason_, available_, deadline_ > now ? deadline_ - now : 0, approval_id_, mode_,
                 input_ready_ && running, max_rounds_locked(), completed_rounds_,
-                profile_ == Profile::Dialogue ? dialogue_idle_ms : 0, idle_left > 0 ? idle_left : 0, fault_, fault_detail_};
+                profile_ == Profile::Dialogue ? dialogue_idle_ms : 0, idle_left > 0 ? idle_left : 0, fault_, fault_detail_,
+                close_required_, close_verified_, close_deadline_exceeded_, close_facts_, close_failure_,supervision_,
+                available_ && phase_==Phase::Idle && (!supervised_admission_required_ || supervised_admission_ready_)};
     }
 private:
     bool current_paid_locked(std::int64_t now, std::uint32_t expected) const {
@@ -180,6 +239,11 @@ private:
             stop_locked(Reason::IdleTimeout);
     }
     std::mutex mutex_;
+    bool close_required_{false}, close_verified_{false}, close_deadline_exceeded_{false};
+    std::uint32_t close_facts_{0};
+    CloseFailure close_failure_{CloseFailure::None};
+    SupervisionProgress supervision_{};
+    bool supervised_admission_required_{false},supervised_admission_ready_{false};
     Phase phase_{Phase::Idle};
     Reason reason_{Reason::None};
     Fault fault_{Fault::None};

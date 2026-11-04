@@ -6,7 +6,11 @@
 #include <cmath>
 #include <condition_variable>
 #include <cstdint>
+#include <cstddef>
 #include <cstdlib>
+#ifdef _WIN32
+#include <malloc.h>
+#endif
 #include <cstring>
 #include <mutex>
 #include <thread>
@@ -76,12 +80,30 @@ inline void vSemaphoreDelete(SemaphoreHandle_t){}
 inline std::int64_t esp_timer_get_time(){return Fake::f().now.load();}
 inline int esp_reset_reason(){return 3;}
 inline std::size_t heap_caps_get_free_size(unsigned cap){return cap==MALLOC_CAP_INTERNAL?Fake::f().internal.load():Fake::f().psram.load();}
-inline void* heap_caps_malloc(std::size_t size,unsigned){auto* p=std::malloc(size);if(p)Fake::f().allocations++;return p;}
-inline void* heap_caps_aligned_alloc(std::size_t align,std::size_t size,unsigned caps){
-    assert(caps&MALLOC_CAP_INTERNAL);auto* p=std::aligned_alloc(align,(size+align-1)/align*align);
+inline void* heap_caps_malloc(std::size_t size,unsigned){
+#ifdef _WIN32
+    auto* p=_aligned_malloc(size,alignof(std::max_align_t));
+#else
+    auto* p=std::malloc(size);
+#endif
     if(p)Fake::f().allocations++;return p;
 }
-inline void heap_caps_free(void* p){if(p){Fake::f().allocations--;std::free(p);}}
+inline void* heap_caps_aligned_alloc(std::size_t align,std::size_t size,unsigned caps){
+    assert(caps&MALLOC_CAP_INTERNAL);
+#ifdef _WIN32
+    auto* p=_aligned_malloc(size,align);
+#else
+    auto* p=std::aligned_alloc(align,(size+align-1)/align*align);
+#endif
+    if(p)Fake::f().allocations++;return p;
+}
+inline void heap_caps_free(void* p){if(p){Fake::f().allocations--;
+#ifdef _WIN32
+    _aligned_free(p);
+#else
+    std::free(p);
+#endif
+}}
 struct FakeMic {
     struct Config{int magnification=4;};Config config(){return {};}
     void config(Config){}

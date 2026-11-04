@@ -137,7 +137,10 @@ static CloseFacts all_closed() { return {true, true, true, true, true, true, tru
 static void test_close_ownership() {
     CloseOwnershipPolicy p;
     check(p.stage() == CloseStage::Idle, "close initially idle");
-    check(!p.begin_close(0, 0, 100) && !p.begin_close(1, 100, 100), "invalid closing scope rejected");
+    check(!p.begin_close(0, 0, 100) && !p.begin_close(1, 100, 0), "invalid closing scope rejected");
+    CloseOwnershipPolicy expired;
+    check(expired.begin_close(99, 101, 100), "expired grant still tracks real shutdown");
+    check(expired.deadline_exceeded() && !expired.destroy_owner_allowed(), "expired start cannot extend deadline or free owner");
     check(p.begin_close(1, 0, 100), "closing starts");
     check(p.stage() == CloseStage::AwaitPermissionRevoke, "permission revoke must be real");
     check(!p.observe(99, 10, all_closed()), "stale close ack ignored");

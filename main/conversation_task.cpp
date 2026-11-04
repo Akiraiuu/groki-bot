@@ -5,6 +5,9 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
+#include <optional>
+#include <type_traits>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -37,6 +40,7 @@
 #include "conversation/farewell.hpp"
 #include "conversation/bounded_event_inbox.hpp"
 #include "conversation/inbox_fault_bridge.hpp"
+#include "conversation/session_operation_gate.hpp"
 #include "local_wake.hpp"
 #include "conversation/xiaozhi_client.hpp"
 #include "led_runtime.hpp"
@@ -311,7 +315,7 @@ public:
                 api_key_, provider_ == config::Provider::Grok
                               ? conv::RealtimeBackend::Xai : conv::RealtimeBackend::OpenAi);
         }
-        client_->set_event_callback([this](const conv::ConversationEvent& ev) { enqueue_event(ev); });
+        client_operation([&]() { return client_->set_event_callback([this](const conv::ConversationEvent& ev) { enqueue_event(ev); }); });
 
         if (provider_ == config::Provider::Grok) {
             run_paid_voice_tests();
@@ -331,10 +335,10 @@ public:
             if (state_.audio_stream_active.load(std::memory_order_acquire)) {
                 if (local_ != Local::Yielded) {
                     ESP_LOGI(kTag, "yielding to BLE audio stream — stopping conversation");
-                    M5.Mic.end();
-                    M5.Speaker.end();
+                    audio_operation([&]() { return M5.Mic.end(); });
+                    audio_operation([&]() { return M5.Speaker.end(); });
                     state_.face.mouth_open.store(0.0f, std::memory_order_relaxed);
-                    client_->stop();
+                    client_operation([&]() { return client_->stop(); });
                     vTaskDelay(pdMS_TO_TICKS(500));
                     flush_events();
                     assistant_pcm_.clear();
@@ -462,6 +466,7 @@ private:
     void run_paid_voice_tests()
     {
         using Test = conv::PaidVoiceTest;
+        conv::paid_voice_test.require_supervised_admission();
         local_wake_boot_diagnostics();
         conv::paid_voice_test.set_available(true, esp_random());
 #if defined(CONFIG_STACKCHAN_JINGTONG_WAKE)
@@ -479,8 +484,13 @@ private:
         };
         for (;;) {
             const auto now = esp_timer_get_time() / 1000;
+            // Close admission before local calls. Any already accepted paid grant
+            // is claimed here, before a wake join, model poll or driver query.
+            conv::paid_voice_test.set_supervised_admission(false);
+            const auto claimed=conv::paid_voice_test.claim_supervised(now);
             const auto pending = conv::paid_voice_test.snapshot(now);
             const bool idle = pending.phase == Test::Phase::Idle;
+            if(!claimed) {
             // Web/USB stop rotates the paid nonce even while idle. It must also
             // revoke local listening, not merely a not-yet-started cloud call.
             if (state_.local_wake.enabled.load() &&
@@ -542,6 +552,7 @@ private:
                     state_.local_wake.status.store(SharedState::LocalWakeState::Listening);
                 }
             }
+            }
             if (conv::paid_voice_test.claim(esp_timer_get_time() / 1000, Test::Mode::Local)) {
                 state_.local_wake.enabled.store(false);
                 // Queued requests reached here only after release_wake above.
@@ -550,55 +561,69 @@ private:
                 run_local_record_playback();
                 continue;
             }
-            if (!conv::paid_voice_test.claim(esp_timer_get_time() / 1000)) {
+            if (!claimed) {
                 if (conv::paid_voice_test.snapshot(esp_timer_get_time() / 1000).phase == Test::Phase::Stopping)
                     conv::paid_voice_test.finish();
+                conv::paid_voice_test.set_supervised_admission(true);
                 vTaskDelay(pdMS_TO_TICKS(state_.local_wake.enabled.load() ? 1 : 50));
                 continue;
             }
-            // Even a start arriving during model initialization must release all
-            // local resources first. Its original 60s deadline is never extended.
+            paid_session_id_=claimed->generation;
+            paid_deadline_us_=static_cast<std::uint64_t>(claimed->deadline_ms)*1000;
+            if(!session_operations_.begin(paid_session_id_,static_cast<std::uint64_t>(now_us()),paid_deadline_us_)) {
+                fail_supervision_start(conv::CloseFailure::Invariant);
+                await_supervision();
+            }
+            auto bootstrap=session_operations_.adopt_bootstrap(paid_session_id_);
+            if(!bootstrap) { fail_supervision_start(conv::CloseFailure::Invariant);await_supervision(); }
+            paid_supervision_active_.store(true,std::memory_order_release);
             state_.local_wake.enabled.store(false);
-            state_.local_wake.status.store(SharedState::LocalWakeState::Off);
-            if (!release_wake()) { conv::paid_voice_test.request_stop(Test::Reason::Error, Test::Fault::WakeRelease); continue; }
-            conv::wake_confirmation.cancel();
-            paid_input_.reset();
-            paid_reply_done_ = false;
-            paid_session_id_ = conv::paid_voice_test.snapshot(esp_timer_get_time() / 1000).approval_id;
-            // Prior client shutdown and producer quiescence precede this scope.
-            flush_events();
-            inbox_failure_handled_ = false;
-            if (!paid_inbox_.policy().begin(paid_session_id_)) {
-                conv::paid_voice_test.request_stop(Test::Reason::Error, Test::Fault::EventInbox);
-                conv::paid_voice_test.set_available(false);
-                state_.set_balloon_text("事件资源未关闭，请彻底关机", 5000);
-                // Keep Stopping and keep all owners alive. Do not falsely finish,
-                // reuse the client, or admit another grant after an invariant error.
-                for (;;) vTaskDelay(pdMS_TO_TICKS(50));
-            }
-            const auto scope = conv::paid_voice_test.snapshot(esp_timer_get_time() / 1000);
-            state_.set_balloon_text(scope.max_rounds > 1 ? "对话最多3轮，整次60秒，空闲10秒结束" : "付费语音测试：1轮，最多60秒", 5000);
-            // Wi-Fi wait consumes the same budget. No token is requested yet.
-            while (!wifi_is_connected() && conv::paid_voice_test.permitted(esp_timer_get_time() / 1000))
-                vTaskDelay(pdMS_TO_TICKS(50));
-            if (conv::paid_voice_test.permitted(esp_timer_get_time() / 1000) && !connect())
-                conv::paid_voice_test.request_stop(Test::Reason::Error, Test::Fault::Connect);
-            while (conv::paid_voice_test.permitted(esp_timer_get_time() / 1000)) {
-                if (!wifi_is_connected() || state_.audio_stream_active.load(std::memory_order_acquire)) {
-                    conv::paid_voice_test.request_stop(Test::Reason::Interrupted);
-                    break;
+            const bool started=start_supervision();
+            if(!started) {
+                // Only release the pre-existing wake owner; never start media.
+                if(release_wake()) bootstrap->audio.reset();
+                else failed_wake_lease_=std::move(bootstrap->audio);
+            } else do {
+                // Existing wake ownership is adopted before the supervisor starts.
+                // Releasing it is shutdown, not a new microphone admission.
+                state_.local_wake.enabled.store(false);
+                state_.local_wake.status.store(SharedState::LocalWakeState::Off);
+                if(!release_wake()) {
+                    conv::paid_voice_test.request_stop(Test::Reason::Error,Test::Fault::WakeRelease);
+                    record_supervision_failure(conv::CloseFailure::Invariant);
+                    failed_wake_lease_=std::move(bootstrap->audio);
+                    break; // Unknown wake owner stays leased; no concurrent end().
                 }
-                drain_events();
-                if (conv::paid_voice_test.permitted(esp_timer_get_time() / 1000)) service_state();
-            }
+                bootstrap->audio.reset();
+                if(!conv::paid_voice_test.permitted(esp_timer_get_time()/1000,paid_session_id_)) break;
+                conv::wake_confirmation.cancel();
+                paid_input_.reset();paid_reply_done_=false;
+                flush_events();inbox_failure_handled_=false;
+                if(!paid_inbox_.policy().begin(paid_session_id_)) {
+                    conv::paid_voice_test.request_stop(Test::Reason::Error,Test::Fault::EventInbox);
+                    record_supervision_failure(conv::CloseFailure::Invariant);break;
+                }
+                const auto scope=conv::paid_voice_test.snapshot(esp_timer_get_time()/1000);
+                state_.set_balloon_text(scope.max_rounds>1?"对话最多3轮，整次60秒，空闲10秒结束":"付费语音测试：1轮，最多60秒",5000);
+                while(!wifi_is_connected() && conv::paid_voice_test.permitted(esp_timer_get_time()/1000,paid_session_id_))
+                    vTaskDelay(pdMS_TO_TICKS(50));
+                if(conv::paid_voice_test.permitted(esp_timer_get_time()/1000,paid_session_id_) && !connect())
+                    conv::paid_voice_test.request_stop(Test::Reason::Error,Test::Fault::Connect);
+                while(conv::paid_voice_test.permitted(esp_timer_get_time()/1000,paid_session_id_)) {
+                    if(session_operations_.observe(static_cast<std::uint64_t>(now_us())).revoked) break;
+                    if(!wifi_is_connected() || state_.audio_stream_active.load(std::memory_order_acquire)) {
+                        conv::paid_voice_test.request_stop(Test::Reason::Interrupted);break;
+                    }
+                    drain_events();
+                    if(conv::paid_voice_test.permitted(esp_timer_get_time()/1000,paid_session_id_)) service_state();
+                }
+            } while(false);
             // Revoke permission before releasing any transport. Queued audio
             // cannot pass the sender's final per-write permission check.
             conv::paid_voice_test.request_stop(Test::Reason::Timeout);
-            paid_inbox_.policy().revoke(paid_session_id_);
-            M5.Mic.end();
-            M5.Speaker.end();
-            client_->stop();
-            flush_events();
+            session_operations_.revoke(paid_session_id_);
+            bootstrap->coordinator.reset();
+            await_supervision();
             assistant_pcm_.clear();
             assistant_text_.clear();
             pending_chunks_.clear();
@@ -611,6 +636,223 @@ private:
             state_.set_balloon_text("测试结束，语音连接已关闭", 5000);
             conv::paid_voice_test.finish();
             ESP_LOGI(kTag, "paid voice test ended; connection closed, no automatic retry");
+        }
+    }
+
+    using OperationLease=std::optional<control::SessionOperationGate::Lease>;
+    OperationLease operation_lease(std::uint32_t domains) {
+        if(!conv::paid_voice_test.permitted(esp_timer_get_time()/1000,paid_session_id_)) return std::nullopt;
+        return session_operations_.acquire(domains,paid_session_id_,static_cast<std::uint64_t>(now_us()));
+    }
+    template<class Fn> auto audio_operation(Fn&& fn) -> std::invoke_result_t<Fn> {
+        using R=std::invoke_result_t<Fn>;
+        if(provider_!=config::Provider::Grok || !paid_supervision_active_.load(std::memory_order_acquire)) return fn();
+        auto lease=operation_lease(control::AudioOperation);
+        if(lease) return fn();
+        if constexpr(!std::is_void_v<R>) return R{};
+    }
+    template<class Fn> auto client_operation(Fn&& fn) -> std::invoke_result_t<Fn> {
+        using R=std::invoke_result_t<Fn>;
+        if(provider_!=config::Provider::Grok || !paid_supervision_active_.load(std::memory_order_acquire)) return fn();
+        auto lease=operation_lease(control::ClientOperation);
+        if(lease) return fn();
+        if constexpr(std::is_same_v<R,tl::expected<void,conv::ConversationError>>)
+            return tl::unexpected(conv::ConversationError::InvalidState);
+        else if constexpr(!std::is_void_v<R>) return R{};
+    }
+    template<class Fn> auto preparation_operation(Fn&& fn) -> std::optional<std::invoke_result_t<Fn>> {
+        auto lease=operation_lease(control::PreparationOperation);
+        if(!lease) return std::nullopt;
+        std::shared_ptr<void> retained;
+        if constexpr(std::is_invocable_v<Fn,std::shared_ptr<void>>)
+            retained=std::make_shared<control::SessionOperationGate::Lease>(std::move(*lease));
+        auto result=[&](){
+            if constexpr(std::is_invocable_v<Fn,std::shared_ptr<void>>)return fn(retained);
+            else return fn();
+        }();
+        // A response arriving after STOP/expiry must die here, before publication.
+        if(!conv::paid_voice_test.permitted(esp_timer_get_time()/1000,paid_session_id_) ||
+           session_operations_.observe(static_cast<std::uint64_t>(now_us())).revoked) return std::nullopt;
+        return result;
+    }
+    void record_supervision_failure(conv::CloseFailure failure) {
+        auto expected=conv::CloseFailure::None;
+        supervisor_failure_.compare_exchange_strong(expected,failure,std::memory_order_acq_rel);
+    }
+    void fail_supervision_start(conv::CloseFailure failure) {
+        paid_supervision_active_.store(true,std::memory_order_release);
+        record_supervision_failure(failure);
+        session_operations_.revoke(paid_session_id_);
+        conv::paid_voice_test.request_stop(conv::PaidVoiceTest::Reason::Error,conv::PaidVoiceTest::Fault::Shutdown);
+        conv::paid_voice_test.observe_close(conv::PermissionRevoked,false,failure);
+        supervisor_finished_.store(true,std::memory_order_release);
+    }
+    bool start_supervision() {
+        audio_close_facts_.store(0,std::memory_order_relaxed);
+        audio_close_workers_.store(0,std::memory_order_relaxed);
+        audio_close_failed_.store(false,std::memory_order_relaxed);
+        supervisor_facts_.store(0,std::memory_order_relaxed);
+        supervisor_late_.store(false,std::memory_order_relaxed);
+        supervisor_failure_.store(conv::CloseFailure::None,std::memory_order_relaxed);
+        supervisor_finished_.store(false,std::memory_order_relaxed);
+        if(!session_operations_.seal(paid_session_id_)) {fail_supervision_start(conv::CloseFailure::Invariant);return false;}
+        TaskHandle_t task=nullptr;
+        // No TLS, UI rendering or PCM allocation runs on this supervisor stack.
+        if(xTaskCreatePinnedToCoreWithCaps(&Coordinator::supervision_trampoline,"voice_supervisor",4096,
+                this,5,&task,1,MALLOC_CAP_SPIRAM)!=pdPASS) {
+            fail_supervision_start(conv::CloseFailure::WorkerStart);return false;
+        }
+        return true;
+    }
+    static void audio_close_trampoline(void* arg) {
+        auto* self=static_cast<Coordinator*>(arg);
+        // One exclusive owner serializes the shared I2S drivers. No driver is
+        // touched until all application audio leases have returned.
+        const bool mic=M5.Mic.isRunning(),speaker=M5.Speaker.isRunning();
+        if(mic && speaker) {
+            self->audio_close_failed_.store(true,std::memory_order_release);
+        } else {
+            if(speaker) {
+                M5.Speaker.end();
+                if(!M5.Speaker.isRunning() && !M5.Speaker.isPlaying())
+                    self->audio_close_facts_.fetch_or(2,std::memory_order_release);
+                M5.Mic.end();
+                if(!M5.Mic.isRunning() && M5.Mic.isRecording()==0)
+                    self->audio_close_facts_.fetch_or(1,std::memory_order_release);
+            } else {
+                M5.Mic.end();
+                if(!M5.Mic.isRunning() && M5.Mic.isRecording()==0)
+                    self->audio_close_facts_.fetch_or(1,std::memory_order_release);
+                M5.Speaker.end();
+                if(!M5.Speaker.isRunning() && !M5.Speaker.isPlaying())
+                    self->audio_close_facts_.fetch_or(2,std::memory_order_release);
+            }
+            if(self->audio_close_facts_.load(std::memory_order_acquire)!=3)
+                self->audio_close_failed_.store(true,std::memory_order_release);
+        }
+        self->audio_close_workers_.store(3,std::memory_order_release); // Last owner access.
+        vTaskDeleteWithCaps(nullptr);
+    }
+    static void supervision_trampoline(void* arg) {
+        auto* self=static_cast<Coordinator*>(arg);
+        self->supervise_scope();
+        self->supervisor_finished_.store(true,std::memory_order_release); // Last owner access.
+        vTaskDeleteWithCaps(nullptr);
+    }
+    void supervise_scope() {
+        control::CloseOwnershipPolicy policy;
+        bool closing=false,client_claimed=false,audio_claimed=false,queue_drained=false;
+        for(;;) {
+            const auto now=static_cast<std::uint64_t>(now_us());
+            auto operations=session_operations_.observe(now);
+            const bool allowed=conv::paid_voice_test.permitted(static_cast<std::int64_t>(now/1000),paid_session_id_);
+            if(operations.invariant_failed) record_supervision_failure(conv::CloseFailure::Invariant);
+            if(!closing && (operations.revoked || !allowed)) {
+                closing=true;
+                conv::paid_voice_test.request_stop(conv::PaidVoiceTest::Reason::Timeout);
+                session_operations_.revoke(paid_session_id_);
+                paid_inbox_.policy().revoke(paid_session_id_);
+                if(!policy.begin_close(paid_session_id_,now,paid_deadline_us_))
+                    record_supervision_failure(conv::CloseFailure::Invariant);
+                operations=session_operations_.observe(now);
+            }
+            conv::SupervisionProgress progress;
+            progress.coordinator=operations.coordinator;progress.preparation=operations.preparation;
+            progress.client=operations.client;progress.audio=operations.audio;
+            if(!closing) {
+                progress.stage=conv::SupervisionStage::Active;
+                conv::paid_voice_test.update_supervision(progress);
+                vTaskDelay(pdMS_TO_TICKS(10));continue;
+            }
+            if(!client_claimed && session_operations_.claim_client_close(paid_session_id_)) {
+                client_claimed=true;
+                if(client_) client_->begin_controlled_close();
+            }
+            // External audio has a separate owner; never end() its driver here.
+            if(!audio_claimed && !state_.audio_stream_active.load(std::memory_order_acquire) &&
+               session_operations_.claim_audio_close(paid_session_id_)) {
+                audio_claimed=true;TaskHandle_t task=nullptr;
+                if(xTaskCreatePinnedToCoreWithCaps(&Coordinator::audio_close_trampoline,"voice_audio_close",4096,
+                        this,5,&task,0,MALLOC_CAP_SPIRAM)!=pdPASS) {
+                    audio_close_failed_.store(true,std::memory_order_release);
+                    audio_close_workers_.store(3,std::memory_order_release);
+                }
+            }
+            conv::ControlledCloseSnapshot transport;
+            if(client_claimed) {
+                if(client_) transport=client_->controlled_close_snapshot();
+                else transport={true,true,true,true,true,true,conv::CloseFailure::None,conv::TransportCloseStage::Finished};
+                if(!transport.supported) record_supervision_failure(conv::CloseFailure::Unsupported);
+                if(transport.failure!=conv::CloseFailure::None) record_supervision_failure(transport.failure);
+            }
+            if(audio_close_failed_.load(std::memory_order_acquire)) record_supervision_failure(conv::CloseFailure::AudioFailed);
+            if(operations.quiescent() && transport.callbacks_quiesced && transport.sender_finished && !queue_drained) {
+                flush_events();queue_drained=paid_inbox_.policy().pending()==0;
+                if(!queue_drained) record_supervision_failure(conv::CloseFailure::Invariant);
+            }
+            const bool audio_stopped=audio_close_facts_.load(std::memory_order_acquire)==3;
+            const bool workers_finished=transport.worker_finished && audio_close_workers_.load(std::memory_order_acquire)==3;
+            const control::CloseFacts facts{operations.revoked,audio_stopped,transport.sender_finished,
+                transport.transport_closed,transport.callbacks_quiesced,workers_finished,queue_drained};
+            // Task creation/SDK entry or queue draining may itself consume time.
+            // Classify acknowledgements using a fresh observation, never the
+            // timestamp sampled before those operations.
+            if(!policy.observe(paid_session_id_,static_cast<std::uint64_t>(now_us()),facts))
+                record_supervision_failure(conv::CloseFailure::Invariant);
+            const auto bit=[](bool value,conv::CloseFact flag) {return value?static_cast<std::uint32_t>(flag):0u;};
+            const auto mask=bit(operations.revoked,conv::PermissionRevoked)|bit(audio_stopped,conv::AudioStopped)|
+                bit(transport.sender_finished,conv::SenderFinished)|bit(transport.transport_closed,conv::TransportClosed)|
+                bit(transport.callbacks_quiesced,conv::CallbacksQuiesced)|bit(workers_finished,conv::WorkerFinished)|
+                bit(queue_drained,conv::QueueDrained)|bit(operations.quiescent(),conv::ApplicationQuiesced);
+            supervisor_facts_.store(mask,std::memory_order_release);
+            if(policy.deadline_exceeded()) supervisor_late_.store(true,std::memory_order_release);
+            const auto failure=supervisor_failure_.load(std::memory_order_acquire);
+            conv::paid_voice_test.observe_close(mask,supervisor_late_.load(std::memory_order_acquire),failure);
+            progress.transport_stage=transport.stage;
+            progress.audio_facts=audio_close_facts_.load(std::memory_order_acquire);
+            progress.audio_workers=audio_close_workers_.load(std::memory_order_acquire);
+            progress.stage=operations.preparation?conv::SupervisionStage::AwaitPreparation:
+                operations.client?conv::SupervisionStage::AwaitClient:
+                operations.audio?conv::SupervisionStage::AwaitAudio:
+                operations.coordinator?conv::SupervisionStage::AwaitCoordinator:
+                !transport.worker_finished?conv::SupervisionStage::Transport:
+                !audio_stopped?conv::SupervisionStage::Audio:!queue_drained?conv::SupervisionStage::Drain:
+                conv::SupervisionStage::Finalizing;
+            conv::paid_voice_test.update_supervision(progress);
+            if(policy.destroy_owner_allowed() && operations.quiescent()) return;
+            vTaskDelay(pdMS_TO_TICKS(10));
+        }
+    }
+    void await_supervision() {
+        bool shown=false;
+        for(;;) {
+            const auto now=static_cast<std::uint64_t>(now_us());
+            if(supervisor_finished_.load(std::memory_order_acquire)) {
+                const auto mask=supervisor_facts_.load(std::memory_order_acquire)|conv::SupervisorFinished;
+                const bool late=supervisor_late_.load(std::memory_order_acquire)||now>=paid_deadline_us_;
+                const auto failure=supervisor_failure_.load(std::memory_order_acquire);
+                auto progress=conv::paid_voice_test.snapshot(static_cast<std::int64_t>(now/1000)).supervision;
+                progress.supervisor_finished=true;
+                progress.stage=late||failure!=conv::CloseFailure::None?conv::SupervisionStage::Failed:conv::SupervisionStage::Closed;
+                conv::paid_voice_test.update_supervision(progress);
+                // Publish progress before the positive verification flag; an
+                // HTTP snapshot must never claim verified with missing last ack.
+                conv::paid_voice_test.observe_close(mask,late,failure);
+                if(conv::paid_voice_test.snapshot(static_cast<std::int64_t>(now/1000)).close_verified) {
+                    if(session_operations_.release_scope(paid_session_id_)) {
+                        paid_supervision_active_.store(false,std::memory_order_release);return;
+                    }
+                    record_supervision_failure(conv::CloseFailure::Invariant);
+                    conv::paid_voice_test.observe_close(mask,late,conv::CloseFailure::Invariant);
+                }
+            }
+            if(!shown && (now>=paid_deadline_us_ || supervisor_failure_.load(std::memory_order_acquire)!=conv::CloseFailure::None)) {
+                shown=true;
+                state_.conv.status.store(ConvStatus::Error,std::memory_order_relaxed);
+                state_.set_balloon_text("语音关闭未核实，请彻底关机",5000);
+            }
+            // No forced task deletion, retry, owner destruction or false idle.
+            vTaskDelay(pdMS_TO_TICKS(50));
         }
     }
 
@@ -715,7 +957,19 @@ private:
         if (provider_ == config::Provider::Grok) {
             if (!conv::paid_voice_test.permitted(esp_timer_get_time() / 1000)) return false;
             const auto& broker = xai_token_url_.empty() ? std::string(conv::kSavedAgentTokenUrl) : xai_token_url_;
-            auto ticket = conv::fetch_agent_ticket(broker, xai_device_token_);
+            const auto preparation_id=paid_session_id_;
+            auto prepared=preparation_operation([&,preparation_id](std::shared_ptr<void> hold={}) {
+                conv::TicketPreparationPermit permit;
+                permit.deadline_us=static_cast<std::int64_t>(paid_deadline_us_);permit.operation_lease=std::move(hold);
+                permit.generation=preparation_id;
+                permit.allowed=[this,preparation_id] {
+                    return conv::paid_voice_test.permitted(esp_timer_get_time()/1000,preparation_id) &&
+                        !session_operations_.observe(static_cast<std::uint64_t>(now_us())).revoked;
+                };
+                return conv::fetch_agent_ticket(broker,xai_device_token_,permit);
+            });
+            if(!prepared) return false;
+            auto ticket=std::move(*prepared);
             if (!ticket) {
                 ESP_LOGW(kTag, "saved Agent token request failed (code=%d)", static_cast<int>(ticket.error()));
                 return false;
@@ -723,13 +977,16 @@ private:
             if (!conv::paid_voice_test.permitted(esp_timer_get_time() / 1000)) return false;
             const auto test_id = conv::paid_voice_test.snapshot(esp_timer_get_time() / 1000).approval_id;
             cfg.session_permitted = [test_id] { return conv::paid_voice_test.permitted(esp_timer_get_time() / 1000, test_id); };
+            cfg.session_deadline_us=static_cast<std::int64_t>(paid_deadline_us_);
             cfg.allow_multiple_turns = conv::paid_voice_test.snapshot(esp_timer_get_time() / 1000).max_rounds > 1;
             cfg.agent_id = std::move(ticket->agent_id);
             // Reconnect always creates a new transport with a freshly issued token.
+            auto binding=operation_lease(control::ClientOperation);
+            if(!binding) return false;
             client_ = std::make_unique<conv::OpenAiRealtimeClient>(std::move(ticket->token), conv::RealtimeBackend::Xai);
-            client_->set_event_callback([this, test_id](const conv::ConversationEvent& ev) {
+            client_operation([&]() { return client_->set_event_callback([this, test_id](const conv::ConversationEvent& ev) {
                 enqueue_event(ev, test_id);
-            });
+            }); });
         }
         // User-set system prompt (over Wi-Fi) wins; empty falls back to the
         // firmware's built-in persona.
@@ -763,7 +1020,7 @@ private:
         config_ = cfg;
 
         set_local(Local::Init);
-        auto r = client_->start(config_);
+        auto r = client_operation([&]() { return client_->start(config_); });
         if (!r) {
             ESP_LOGE(kTag, "client start failed: %d", static_cast<int>(r.error()));
             return false;
@@ -871,11 +1128,11 @@ private:
         state_.conv.status.store(ConvStatus::Reconnecting, std::memory_order_relaxed);
         state_.conv.reconnects.fetch_add(1, std::memory_order_relaxed);
         if (local_ == Local::Speaking) {
-            M5.Speaker.end();
+            audio_operation([&]() { return M5.Speaker.end(); });
             vTaskDelay(kI2sSettle);
         }
         state_.face.mouth_open.store(0.0f, std::memory_order_relaxed);
-        client_->stop();
+        client_operation([&]() { return client_->stop(); });
         // The shutdown fires WEBSOCKET_EVENT_DISCONNECTED (and sometimes a
         // trailing ERROR) which the trampoline turns into transport-error
         // events. We sit out the WS task's teardown, then flush the queue —
@@ -1068,15 +1325,15 @@ private:
         // Sample buffer-occupancy + speaker queue depth once per service tick,
         // before any topup decisions. spk_queue=2 = healthy steady, 0 = under-
         // run risk; pcm_lag = unplayed samples already in assistant_pcm_.
-        spk_queue_.record(static_cast<float>(M5.Speaker.isPlaying(kSpeakerChannel)));
+        spk_queue_.record(static_cast<float>(audio_operation([&]() { return M5.Speaker.isPlaying(kSpeakerChannel); })));
         pcm_lag_samples_.record(static_cast<float>(assistant_pcm_.size() - seg_pos_));
 
         while (seg_pos_ < assistant_pcm_.size() &&
-               M5.Speaker.isPlaying(kSpeakerChannel) < kSegmentBuffers - 1) {
+               audio_operation([&]() { return M5.Speaker.isPlaying(kSpeakerChannel); }) < kSegmentBuffers - 1) {
             const std::size_t n = std::min(kSegmentSamples, assistant_pcm_.size() - seg_pos_);
             std::memcpy(seg_buf_[seg_next_], assistant_pcm_.data() + seg_pos_, n * sizeof(std::int16_t));
-            M5.Speaker.playRaw(seg_buf_[seg_next_], n, speaker_sample_rate_, /*stereo=*/false,
-                               /*repeat=*/1, kSpeakerChannel, /*stop_current_sound=*/false);
+            audio_operation([&]() { return M5.Speaker.playRaw(seg_buf_[seg_next_], n, speaker_sample_rate_, /*stereo=*/false,
+                               /*repeat=*/1, kSpeakerChannel, /*stop_current_sound=*/false); });
             seg_pos_ += n;
             seg_next_ = (seg_next_ + 1) % kSegmentBuffers;
             // Account for every chunk whose tail is now queued. A single
@@ -1096,7 +1353,7 @@ private:
         // and the speaker has physically drained.
         if (audio_complete_ && (provider_ != config::Provider::Grok || paid_reply_done_) &&
             seg_pos_ >= assistant_pcm_.size() &&
-            M5.Speaker.isPlaying(kSpeakerChannel) == 0) {
+            audio_operation([&]() { return M5.Speaker.isPlaying(kSpeakerChannel); }) == 0) {
             finish_speaking();
         } else {
             vTaskDelay(pdMS_TO_TICKS(10));
@@ -1110,8 +1367,8 @@ private:
             return;
         }
         ESP_LOGI(kTag, "barge-in: user touched the head, interrupting reply");
-        M5.Speaker.stop();
-        (void)client_->cancel_response();
+        audio_operation([&]() { return M5.Speaker.stop(); });
+        (void)client_operation([&]() { return client_->cancel_response(); });
         // Discard audio already queued before the backend saw cancellation,
         // retaining connection failures so the normal recovery path sees them.
         flush_events(/*preserve_connection_events=*/true);
@@ -1134,7 +1391,7 @@ private:
             vTaskDelay(pdMS_TO_TICKS(5));
             return;
         }
-        if (M5.Mic.isRecording() < 2) {
+        if (audio_operation([&]() { return M5.Mic.isRecording(); }) < 2) {
             auto& buf = mic_buf_[mic_read_];
             if (provider_ == config::Provider::Grok && mic_settle_samples_ != 0) {
                 // Preserve the stream cadence while the codec/DC filter settles
@@ -1143,7 +1400,7 @@ private:
                 std::fill_n(buf.begin(), n, 0);
                 mic_settle_samples_ -= n;
             }
-            const auto pushed = client_->push_audio(std::span<const std::int16_t>{buf.data(), buf.size()});
+            const auto pushed = client_operation([&]() { return client_->push_audio(std::span<const std::int16_t>{buf.data(), buf.size()}); });
             if (provider_ == config::Provider::Grok) {
                 // Numeric-only diagnostics: no recording, transcript or token.
                 ++mic_window_frames_;
@@ -1173,7 +1430,7 @@ private:
                     mic_window_since_ms_ = now_ms();
                 }
             }
-            const bool recorded = M5.Mic.record(mic_buf_[mic_read_].data(), mic_buf_[mic_read_].size(), mic_sample_rate_, /*stereo=*/false);
+            const bool recorded = audio_operation([&]() { return M5.Mic.record(mic_buf_[mic_read_].data(), mic_buf_[mic_read_].size(), mic_sample_rate_, /*stereo=*/false); });
             if (provider_ == config::Provider::Grok) {
                 if (!recorded) {
                     ++mic_window_record_errors_;
@@ -1201,7 +1458,7 @@ private:
             publish_input_ready(false);
             paid_ready_announced_ = false;
         }
-        M5.Speaker.end();
+        audio_operation([&]() { return M5.Speaker.end(); });
         vTaskDelay(kI2sSettle);
         state_.face.mouth_open.store(0.0f, std::memory_order_relaxed);
         // Safety net: log_playback_metrics already cleared these on
@@ -1220,10 +1477,10 @@ private:
         state_.barge_in_request.store(false, std::memory_order_relaxed);
         // Prime the 2-deep mic queue.
         mic_settle_samples_ = provider_ == config::Provider::Grok ? mic_sample_rate_ * 160u / 1000u : 0;
-        const bool first_recorded = M5.Mic.record(mic_buf_[0].data(), mic_buf_[0].size(), mic_sample_rate_, /*stereo=*/false);
-        const bool second_recorded = M5.Mic.record(mic_buf_[1].data(), mic_buf_[1].size(), mic_sample_rate_, /*stereo=*/false);
+        const bool first_recorded = audio_operation([&]() { return M5.Mic.record(mic_buf_[0].data(), mic_buf_[0].size(), mic_sample_rate_, /*stereo=*/false); });
+        const bool second_recorded = audio_operation([&]() { return M5.Mic.record(mic_buf_[1].data(), mic_buf_[1].size(), mic_sample_rate_, /*stereo=*/false); });
         if (provider_ == config::Provider::Grok && (!first_recorded || !second_recorded)) {
-            M5.Mic.end();
+            audio_operation([&]() { return M5.Mic.end(); });
             conv::paid_voice_test.request_stop(conv::PaidVoiceTest::Reason::Error, conv::PaidVoiceTest::Fault::Microphone);
             return;
         }
@@ -1237,7 +1494,7 @@ private:
     void start_speaking()
     {
         if (provider_ == config::Provider::Grok) publish_input_ready(false);
-        M5.Mic.end();
+        audio_operation([&]() { return M5.Mic.end(); });
         vTaskDelay(kI2sSettle);
         seg_pos_ = 0;
         seg_next_ = 0;
@@ -1282,7 +1539,7 @@ private:
     void continue_paid_dialogue()
     {
         if (!conv::paid_voice_test.reply_completed(esp_timer_get_time() / 1000, paid_session_id_)) return;
-        if (!client_->begin_input_turn()) {
+        if (!client_operation([&]() { return client_->begin_input_turn(); })) {
             conv::paid_voice_test.request_stop(conv::PaidVoiceTest::Reason::Error, conv::PaidVoiceTest::Fault::InputTurnReset);
             return;
         }
@@ -1298,7 +1555,7 @@ private:
             continue_paid_dialogue();
             return;
         }
-        M5.Speaker.end();
+        audio_operation([&]() { return M5.Speaker.end(); });
         vTaskDelay(kI2sSettle);
         state_.face.mouth_open.store(0.0f, std::memory_order_relaxed);
         log_playback_metrics();
@@ -1360,7 +1617,7 @@ private:
         snap.played_sps = static_cast<float>(played_sps);
         // Session-cumulative uplink congestion counter, maintained by the
         // backend client (per-chunk eviction warnings are rate-limited there).
-        snap.tx_evicted_chunks = client_ != nullptr ? client_->tx_evicted_chunks() : 0;
+        snap.tx_evicted_chunks = client_ != nullptr ? client_operation([&]() { return client_->tx_evicted_chunks(); }) : 0;
         state_.update_audio_metrics(snap);
         recv_lag_us_.reset();
         recv_to_queued_ms_.reset();
@@ -1380,7 +1637,7 @@ private:
                 (void)conv::paid_voice_test.note_user_activity(esp_timer_get_time() / 1000, paid_session_id_);
             if (ev.type == conv::ConversationEventType::UserTranscript && conv::is_farewell(ev.text)) {
                 publish_input_ready(false);
-                M5.Mic.end();
+                audio_operation([&]() { return M5.Mic.end(); });
                 conv::paid_voice_test.request_stop(conv::PaidVoiceTest::Reason::Farewell);
                 state_.set_balloon_text("对话已结束", 5000);
                 return;
@@ -1440,7 +1697,7 @@ private:
         case conv::ConversationEventType::UserTranscript:
             if (provider_ == config::Provider::Grok && !paid_input_.open()) {
                 publish_input_ready(false);
-                M5.Mic.end();
+                audio_operation([&]() { return M5.Mic.end(); });
                 ESP_LOGI(kTag, "recognized input complete; microphone and queued uplink stopped");
             }
             ESP_LOGI(kTag, "user: %s", ev.text.c_str());
@@ -1603,7 +1860,7 @@ private:
         // result; mark it pending so ResponseDone for the tool-call response
         // doesn't drop us back to Listening prematurely.
         tool_pending_ = true;
-        auto r = client_->submit_tool_result(call.call_id, result);
+        auto r = client_operation([&]() { return client_->submit_tool_result(call.call_id, result); });
         if (!r) {
             ESP_LOGE(kTag, "submit_tool_result failed: %d", static_cast<int>(r.error()));
         }
@@ -1682,7 +1939,7 @@ private:
         // I2S handoff: mic → speaker. We may be in Listening (mic primed) or
         // Thinking (mic primed but not being drained); either way the bus
         // needs to belong to the speaker before playRaw.
-        M5.Mic.end();
+        audio_operation([&]() { return M5.Mic.end(); });
         vTaskDelay(kI2sSettle);
 
         // Pre-compute peak envelope so the avatar mouth opens in sync with the
@@ -1711,23 +1968,23 @@ private:
         std::size_t pos = 0;
         std::size_t next = 0;
         while (pos < pcm.size()) {
-            if (M5.Speaker.isPlaying(kSpeakerChannel) < kSegmentBuffers - 1) {
+            if (audio_operation([&]() { return M5.Speaker.isPlaying(kSpeakerChannel); }) < kSegmentBuffers - 1) {
                 const std::size_t n = std::min(kSegmentSamples, pcm.size() - pos);
                 std::memcpy(seg_buf_[next], pcm.data() + pos, n * sizeof(std::int16_t));
-                M5.Speaker.playRaw(seg_buf_[next], n, kKatakotoRate, /*stereo=*/false,
-                                   /*repeat=*/1, kSpeakerChannel, /*stop_current_sound=*/false);
+                audio_operation([&]() { return M5.Speaker.playRaw(seg_buf_[next], n, kKatakotoRate, /*stereo=*/false,
+                                   /*repeat=*/1, kSpeakerChannel, /*stop_current_sound=*/false); });
                 pos += n;
                 next = (next + 1) % kSegmentBuffers;
             }
             update_mouth_from_envelope(now_ms() - start_ms);
             vTaskDelay(pdMS_TO_TICKS(10));
         }
-        while (M5.Speaker.isPlaying(kSpeakerChannel) > 0) {
+        while (audio_operation([&]() { return M5.Speaker.isPlaying(kSpeakerChannel); }) > 0) {
             update_mouth_from_envelope(now_ms() - start_ms);
             vTaskDelay(pdMS_TO_TICKS(10));
         }
 
-        M5.Speaker.end();
+        audio_operation([&]() { return M5.Speaker.end(); });
         vTaskDelay(kI2sSettle);
         state_.face.mouth_open.store(0.0f, std::memory_order_relaxed);
         return R"({"ok":true})";
@@ -1814,6 +2071,14 @@ private:
     std::size_t mic_settle_samples_{0};
     conv::SingleTurnInput paid_input_;
     std::uint32_t paid_session_id_{0};
+    std::uint64_t paid_deadline_us_{0};
+    std::atomic<unsigned> audio_close_facts_{0}, audio_close_workers_{0};
+    std::atomic<bool> audio_close_failed_{false};
+    control::SessionOperationGate session_operations_;
+    std::optional<control::SessionOperationGate::Lease> failed_wake_lease_;
+    std::atomic<bool> paid_supervision_active_{false},supervisor_finished_{true},supervisor_late_{false};
+    std::atomic<std::uint32_t> supervisor_facts_{0};
+    std::atomic<conv::CloseFailure> supervisor_failure_{conv::CloseFailure::None};
     bool paid_ready_announced_{false};
     bool paid_reply_done_{false};
     std::uint32_t mic_window_send_errors_{0}, mic_window_record_errors_{0}, mic_window_since_ms_{0};

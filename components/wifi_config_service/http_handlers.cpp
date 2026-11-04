@@ -1660,9 +1660,11 @@ esp_err_t handle_paid_voice_status(httpd_req_t* req)
     constexpr const char* phases[] = {"idle", "queued", "running", "stopping"};
     constexpr const char* reasons[] = {"none", "completed", "cancelled", "timeout", "error", "interrupted", "idle_timeout", "farewell", "round_limit"};
     const auto& w = conversation::local_wake_status;
-    char body[1400];
-    std::snprintf(body, sizeof(body),
+    char body[2048];
+    const int body_size=std::snprintf(body, sizeof(body),
         "{\"phase\":\"%s\",\"reason\":\"%s\",\"available\":%s,\"remaining_ms\":%lld,\"max_rounds\":%u,\"max_seconds\":60,\"completed_rounds\":%u,\"idle_timeout_ms\":%lld,\"idle_remaining_ms\":%lld,\"approval_id\":%u,\"mode\":\"%s\",\"input_ready\":%s,\"fault_source\":\"%s\",\"fault_detail\":%d,\"local_record_seconds\":5,\"local_max_seconds\":15,"
+        "\"close\":{\"required\":%s,\"verified\":%s,\"deadline_exceeded\":%s,\"facts\":%u,\"fault\":\"%s\"},"
+        "\"start_ready\":%s,\"supervision\":{\"stage\":\"%s\",\"transport_stage\":\"%s\",\"coordinator\":%u,\"preparation\":%u,\"client\":%u,\"audio\":%u,\"audio_facts\":%u,\"audio_workers\":%u,\"finished\":%s},"
         "\"local_wake\":{\"enabled\":%s,\"check_only\":%s,\"state\":%d,\"stage\":%d,\"error\":%d,\"microphone_active\":%s,\"worker_active\":%s,\"remaining_ms\":%u,\"previous_stage\":%u,\"reset_reason\":%d,\"internal_free\":%u,\"psram_free\":%u,\"stack_free\":%u,"
         "\"frames\":%u,\"samples_per_frame\":%u,\"peak\":%u,\"mean_abs_peak\":%u,\"clipped_samples\":%u,\"timeouts\":%u,\"rejected\":%u,\"detect_max_us\":%u,\"last_command\":%d,\"best_target_per_mille\":%u,\"best_other_per_mille\":%u}}",
         phases[static_cast<int>(s.phase)], reasons[static_cast<int>(s.reason)], s.available ? "true" : "false",
@@ -1671,6 +1673,14 @@ esp_err_t handle_paid_voice_status(httpd_req_t* req)
         s.mode == conversation::PaidVoiceTest::Mode::Local ? "local" : "paid",
         s.input_ready ? "true" : "false",
         conversation::PaidVoiceTest::fault_name(s.fault), s.fault_detail,
+        s.close_required?"true":"false",s.close_verified?"true":"false",s.close_deadline_exceeded?"true":"false",
+        static_cast<unsigned>(s.close_facts),conversation::close_failure_name(s.close_failure),
+        s.start_ready?"true":"false",
+        conversation::supervision_stage_name(s.supervision.stage),conversation::transport_close_stage_name(s.supervision.transport_stage),
+        static_cast<unsigned>(s.supervision.coordinator),static_cast<unsigned>(s.supervision.preparation),
+        static_cast<unsigned>(s.supervision.client),static_cast<unsigned>(s.supervision.audio),
+        static_cast<unsigned>(s.supervision.audio_facts),static_cast<unsigned>(s.supervision.audio_workers),
+        s.supervision.supervisor_finished?"true":"false",
         w.enabled.load() ? "true" : "false", w.check_only.load() ? "true" : "false",
         w.status.load(), static_cast<int>(w.stage.load()), static_cast<int>(w.error.load()),
         w.microphone_active.load() ? "true" : "false", w.worker_active.load() ? "true" : "false",
@@ -1685,6 +1695,8 @@ esp_err_t handle_paid_voice_status(httpd_req_t* req)
         static_cast<unsigned>(w.rejected.load()), static_cast<unsigned>(w.detect_max_us.load()),
         w.last_command.load(), static_cast<unsigned>(w.best_target_per_mille.load()),
         static_cast<unsigned>(w.best_other_per_mille.load()));
+    if (body_size<0 || static_cast<std::size_t>(body_size)>=sizeof(body))
+        return send_error(req,"500 Internal Server Error","Voice status unavailable");
     httpd_resp_set_hdr(req, "Cache-Control", "no-store");
     return send_json(req, std::string{body});
 }

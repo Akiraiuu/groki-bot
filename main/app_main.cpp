@@ -606,6 +606,10 @@ extern "C" void app_main()
     g_state->face.fixed_gaze_enabled.store(cfg.fixed_gaze_enabled, std::memory_order_relaxed);
     g_state->barge_in_enabled.store(cfg.barge_in_enabled,
                                     std::memory_order_relaxed);
+#if CONFIG_STACKCHAN_CONVERSATION_ENABLED
+    stackchan::app::settings_sinks::set_exclusive_voice_audio(
+        cfg.openai_enabled && cfg.provider==stackchan::config::Provider::Grok);
+#endif
     stackchan::app::settings_sinks::register_ble_sinks(
         static_cast<std::uint8_t>(board.kind()));
     // BLE audio streaming and the realtime voice conversation are mutually

@@ -1657,12 +1657,16 @@ esp_err_t handle_paid_voice_status(httpd_req_t* req)
 {
     if (!require_auth(req)) return ESP_OK;
     const auto s = conversation::paid_voice_test.snapshot(esp_timer_get_time() / 1000);
+    char connection[256]{};
+    if(!conversation::write_connect_json(connection,sizeof(connection),s.connection))
+        return send_error(req,"500 Internal Server Error","Voice status unavailable");
     constexpr const char* phases[] = {"idle", "queued", "running", "stopping"};
     constexpr const char* reasons[] = {"none", "completed", "cancelled", "timeout", "error", "interrupted", "idle_timeout", "farewell", "round_limit"};
     const auto& w = conversation::local_wake_status;
     char body[2048];
     const int body_size=std::snprintf(body, sizeof(body),
         "{\"phase\":\"%s\",\"reason\":\"%s\",\"available\":%s,\"remaining_ms\":%lld,\"max_rounds\":%u,\"max_seconds\":60,\"completed_rounds\":%u,\"idle_timeout_ms\":%lld,\"idle_remaining_ms\":%lld,\"approval_id\":%u,\"mode\":\"%s\",\"input_ready\":%s,\"fault_source\":\"%s\",\"fault_detail\":%d,\"local_record_seconds\":5,\"local_max_seconds\":15,"
+        "\"connection\":%s,"
         "\"close\":{\"required\":%s,\"verified\":%s,\"deadline_exceeded\":%s,\"facts\":%u,\"fault\":\"%s\"},"
         "\"start_ready\":%s,\"supervision\":{\"stage\":\"%s\",\"transport_stage\":\"%s\",\"coordinator\":%u,\"preparation\":%u,\"client\":%u,\"audio\":%u,\"audio_facts\":%u,\"audio_workers\":%u,\"finished\":%s},"
         "\"local_wake\":{\"enabled\":%s,\"check_only\":%s,\"state\":%d,\"stage\":%d,\"error\":%d,\"microphone_active\":%s,\"worker_active\":%s,\"remaining_ms\":%u,\"previous_stage\":%u,\"reset_reason\":%d,\"internal_free\":%u,\"psram_free\":%u,\"stack_free\":%u,"
@@ -1672,7 +1676,7 @@ esp_err_t handle_paid_voice_status(httpd_req_t* req)
         static_cast<long long>(s.idle_timeout_ms), static_cast<long long>(s.idle_remaining_ms), static_cast<unsigned>(s.approval_id),
         s.mode == conversation::PaidVoiceTest::Mode::Local ? "local" : "paid",
         s.input_ready ? "true" : "false",
-        conversation::PaidVoiceTest::fault_name(s.fault), s.fault_detail,
+        conversation::PaidVoiceTest::fault_name(s.fault), s.fault_detail, connection,
         s.close_required?"true":"false",s.close_verified?"true":"false",s.close_deadline_exceeded?"true":"false",
         static_cast<unsigned>(s.close_facts),conversation::close_failure_name(s.close_failure),
         s.start_ready?"true":"false",

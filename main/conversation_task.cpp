@@ -955,26 +955,38 @@ private:
     {
         conv::ConversationConfig cfg{};
         if (provider_ == config::Provider::Grok) {
-            if (!conv::paid_voice_test.permitted(esp_timer_get_time() / 1000)) return false;
+            const auto diagnostic_generation=paid_session_id_;
+            cfg.connect_observer=[diagnostic_generation](conv::ConnectStage stage,conv::ConnectCode code,conv::ConnectAttempt attempt) {
+                conv::paid_voice_test.note_connection(diagnostic_generation,stage,code,attempt);
+            };
+            conv::observe_connect(cfg.connect_observer,conv::ConnectStage::Permission);
+            if (!conv::paid_voice_test.permitted(esp_timer_get_time() / 1000)) {
+                conv::observe_connect(cfg.connect_observer,conv::ConnectStage::Permission,conv::ConnectCode::InvalidState);return false;
+            }
             const auto& broker = xai_token_url_.empty() ? std::string(conv::kSavedAgentTokenUrl) : xai_token_url_;
             const auto preparation_id=paid_session_id_;
             auto prepared=preparation_operation([&,preparation_id](std::shared_ptr<void> hold={}) {
                 conv::TicketPreparationPermit permit;
                 permit.deadline_us=static_cast<std::int64_t>(paid_deadline_us_);permit.operation_lease=std::move(hold);
-                permit.generation=preparation_id;
+                permit.generation=preparation_id;permit.connect_observer=cfg.connect_observer;
                 permit.allowed=[this,preparation_id] {
                     return conv::paid_voice_test.permitted(esp_timer_get_time()/1000,preparation_id) &&
                         !session_operations_.observe(static_cast<std::uint64_t>(now_us())).revoked;
                 };
                 return conv::fetch_agent_ticket(broker,xai_device_token_,permit);
             });
-            if(!prepared) return false;
+            if(!prepared) {
+                conv::observe_connect(cfg.connect_observer,conv::ConnectStage::PreparationLease,conv::ConnectCode::InvalidState);return false;
+            }
             auto ticket=std::move(*prepared);
             if (!ticket) {
+                conv::observe_connect(cfg.connect_observer,conv::ConnectStage::TicketResult,conv::connect_code(ticket.error()));
                 ESP_LOGW(kTag, "saved Agent token request failed (code=%d)", static_cast<int>(ticket.error()));
                 return false;
             }
-            if (!conv::paid_voice_test.permitted(esp_timer_get_time() / 1000)) return false;
+            if (!conv::paid_voice_test.permitted(esp_timer_get_time() / 1000)) {
+                conv::observe_connect(cfg.connect_observer,conv::ConnectStage::Permission,conv::ConnectCode::InvalidState);return false;
+            }
             const auto test_id = conv::paid_voice_test.snapshot(esp_timer_get_time() / 1000).approval_id;
             cfg.session_permitted = [test_id] { return conv::paid_voice_test.permitted(esp_timer_get_time() / 1000, test_id); };
             cfg.session_deadline_us=static_cast<std::int64_t>(paid_deadline_us_);
@@ -982,7 +994,9 @@ private:
             cfg.agent_id = std::move(ticket->agent_id);
             // Reconnect always creates a new transport with a freshly issued token.
             auto binding=operation_lease(control::ClientOperation);
-            if(!binding) return false;
+            if(!binding) {
+                conv::observe_connect(cfg.connect_observer,conv::ConnectStage::ClientLease,conv::ConnectCode::InvalidState);return false;
+            }
             client_ = std::make_unique<conv::OpenAiRealtimeClient>(std::move(ticket->token), conv::RealtimeBackend::Xai);
             client_operation([&]() { return client_->set_event_callback([this, test_id](const conv::ConversationEvent& ev) {
                 enqueue_event(ev, test_id);
@@ -1022,6 +1036,7 @@ private:
         set_local(Local::Init);
         auto r = client_operation([&]() { return client_->start(config_); });
         if (!r) {
+            conv::observe_connect(cfg.connect_observer,conv::ConnectStage::ClientStart,conv::connect_code(r.error()));
             ESP_LOGE(kTag, "client start failed: %d", static_cast<int>(r.error()));
             return false;
         }

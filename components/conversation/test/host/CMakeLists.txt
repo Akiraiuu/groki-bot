@@ -185,3 +185,26 @@ foreach(target conversation_test_realtime_client conversation_test_saved_agent c
     target_link_libraries(${target} PRIVATE conversation_scope_host)
 endforeach()
 add_subdirectory("${STOPWATCH_PROJECT_ROOT}/tools/controlled-close-tests" "${CMAKE_CURRENT_BINARY_DIR}/controlled-close-tests")
+
+# Actual ticket/client implementations and extracted coordinator connect body.
+set(CONNECT_FIXTURE "${CMAKE_CURRENT_BINARY_DIR}/generated_connect.inc")
+add_custom_command(OUTPUT "${CONNECT_FIXTURE}"
+    BYPRODUCTS "${CMAKE_CURRENT_BINARY_DIR}/generated_voice_status.inc"
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/generate_connect_fixture.py"
+        "${CONVERSATION_ROOT}/../../main/conversation_task.cpp" "${CONNECT_FIXTURE}"
+    DEPENDS generate_connect_fixture.py "${CONVERSATION_ROOT}/../../main/conversation_task.cpp"
+        "${CONVERSATION_ROOT}/../wifi_config_service/http_handlers.cpp")
+add_executable(conversation_test_connect_diagnostics test_connect_diagnostics.cpp
+    "${CONNECT_FIXTURE}" ${CONVERSATION_ROOT}/saved_agent.cpp
+    ${CONVERSATION_ROOT}/openai_realtime_client.cpp ${CONVERSATION_ROOT}/base64.cpp)
+target_include_directories(conversation_test_connect_diagnostics PRIVATE stubs
+    ${CONVERSATION_ROOT} ${CONVERSATION_ROOT}/include ${CMAKE_CURRENT_BINARY_DIR}
+    ${CONVERSATION_ROOT}/../tl_expected/expected/include ${MBEDTLS_INCLUDE_DIR})
+target_compile_definitions(conversation_test_connect_diagnostics PRIVATE CONFIG_STACKCHAN_CONV_WS_RX_BUFFER=131072)
+target_compile_options(conversation_test_connect_diagnostics PRIVATE -Wall -Wextra)
+target_link_libraries(conversation_test_connect_diagnostics PRIVATE conversation_scope_host cjson_host ${MBEDCRYPTO_LIBRARY} Threads::Threads)
+add_test(NAME connect_diagnostics COMMAND conversation_test_connect_diagnostics)
+set_tests_properties(connect_diagnostics PROPERTIES TIMEOUT 20)
+add_test(NAME connect_cleanup_failure COMMAND conversation_test_connect_diagnostics cleanup)
+add_test(NAME connect_first_fault_before_cleanup COMMAND conversation_test_connect_diagnostics cleanup-after-auth)
+set_tests_properties(connect_cleanup_failure connect_first_fault_before_cleanup PROPERTIES TIMEOUT 20)

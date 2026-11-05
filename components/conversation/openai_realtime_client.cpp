@@ -126,37 +126,41 @@ public:
 
     tl::expected<void, ConversationError> start(const ConversationConfig& config)
     {
+        const auto fail=[&](ConnectStage stage,ConnectCode code,ConversationError error) {
+            observe_connect(config.connect_observer,stage,code);return tl::unexpected{error};
+        };
+        observe_connect(config.connect_observer,ConnectStage::ClientConfig);
         if (close_requested_.load(std::memory_order_acquire)) {
-            if (!owner_release_allowed()) return tl::unexpected{ConversationError::InvalidState};
+            if (!owner_release_allowed()) return fail(ConnectStage::ClientConfig,connect_code(ConversationError::InvalidState),ConversationError::InvalidState);
             close_requested_.store(false, std::memory_order_release);
             close_flags_.store(0, std::memory_order_relaxed);
             close_failure_.store(CloseFailure::None, std::memory_order_relaxed);
             close_stage_.store(TransportCloseStage::Inactive, std::memory_order_relaxed);
         }
         if (client_ != nullptr) {
-            return tl::unexpected{ConversationError::InvalidState};
+            return fail(ConnectStage::ClientConfig,connect_code(ConversationError::InvalidState),ConversationError::InvalidState);
         }
         config_ = config;
         if (!config_.agent_id.empty() && (backend_ != RealtimeBackend::Xai ||
             !valid_saved_agent_id(config_.agent_id) || config_.input_sample_rate_hz != 24000 ||
             config_.output_sample_rate_hz != 24000 || api_key_.empty())) {
-            return tl::unexpected{ConversationError::ProtocolError};
+            return fail(ConnectStage::ClientConfig,connect_code(ConversationError::ProtocolError),ConversationError::ProtocolError);
         }
         if (!config_.agent_id.empty() && (!config_.session_permitted || !config_.session_permitted())) {
-            return tl::unexpected{ConversationError::InvalidState};
+            return fail(ConnectStage::Permission,connect_code(ConversationError::InvalidState),ConversationError::InvalidState);
         }
         if(backend_==RealtimeBackend::Xai) {
             const auto now=esp_timer_get_time();
             if(config_.session_deadline_us<=now || scope_generation_==UINT32_MAX)
-                return tl::unexpected{ConversationError::InvalidState};
+                return fail(ConnectStage::ClientScope,connect_code(ConversationError::InvalidState),ConversationError::InvalidState);
             tls_scope_.reset(new(std::nothrow) esp_tls_scope{});
-            if(!tls_scope_)return tl::unexpected{ConversationError::OutOfMemory};
+            if(!tls_scope_)return fail(ConnectStage::ClientScope,connect_code(ConversationError::OutOfMemory),ConversationError::OutOfMemory);
             ++scope_generation_;
             if(!tls_scope_init(tls_scope_.get(),scope_generation_,now,config_.session_deadline_us))
-                return tl::unexpected{ConversationError::InvalidState};
+                return fail(ConnectStage::ClientScope,connect_code(ConversationError::InvalidState),ConversationError::InvalidState);
             if(!tls_scope_set_permission(tls_scope_.get(),scope_generation_,+[](void*owner) {
                     return static_cast<Impl*>(owner)->session_permitted();
-                },this))return tl::unexpected{ConversationError::InvalidState};
+                },this))return fail(ConnectStage::ClientScope,connect_code(ConversationError::InvalidState),ConversationError::InvalidState);
         }
         saved_confirmations_ = 0;
         server_web_ = server_x_ = server_file_ = false;
@@ -174,7 +178,7 @@ public:
         const std::size_t rx_cap = std::max<std::size_t>(1, CONFIG_STACKCHAN_CONV_WS_RX_BUFFER);
         rx_buffer_ = static_cast<char*>(heap_caps_malloc(rx_cap, MALLOC_CAP_SPIRAM));
         if (rx_buffer_ == nullptr) {
-            return tl::unexpected{ConversationError::OutOfMemory};
+            return fail(ConnectStage::ClientMemory,connect_code(ConversationError::OutOfMemory),ConversationError::OutOfMemory);
         }
         rx_capacity_ = rx_cap;
         rx_len_ = 0;
@@ -222,7 +226,7 @@ public:
         client_ = esp_websocket_client_init(&cfg);
         if (client_ == nullptr) {
             teardown();
-            return tl::unexpected{ConversationError::TransportInit};
+            return fail(ConnectStage::ClientInit,connect_code(ConversationError::TransportInit),ConversationError::TransportInit);
         }
 
         const std::string auth = std::string{"Bearer "} + api_key_;
@@ -245,7 +249,7 @@ public:
         audio_tx_queue_ = xQueueCreate(kAudioTxQueueLen, sizeof(AudioChunk*));
         if (audio_tx_queue_ == nullptr) {
             teardown();
-            return tl::unexpected{ConversationError::OutOfMemory};
+            return fail(ConnectStage::ClientQueue,connect_code(ConversationError::OutOfMemory),ConversationError::OutOfMemory);
         }
         sender_should_exit_.store(false, std::memory_order_relaxed);
         sender_finished_.store(false, std::memory_order_release);
@@ -258,14 +262,20 @@ public:
                                             MALLOC_CAP_SPIRAM) != pdPASS) {
             sender_finished_.store(true, std::memory_order_release);
             teardown();
-            return tl::unexpected{ConversationError::TransportInit};
+            return fail(ConnectStage::ClientWorker,connect_code(ConversationError::TransportInit),ConversationError::TransportInit);
         }
 
-        if (!session_permitted() || esp_websocket_client_start(client_) != ESP_OK) {
+        if (!session_permitted()) {
             teardown();
-            return tl::unexpected{ConversationError::TransportInit};
+            return fail(ConnectStage::Permission,ConnectCode::InvalidState,ConversationError::TransportInit);
+        }
+        observe_connect(config.connect_observer,ConnectStage::ClientStart,ConnectCode::None,ConnectAttempt::WebsocketStart);
+        if (esp_websocket_client_start(client_) != ESP_OK) {
+            teardown();
+            return fail(ConnectStage::ClientStart,connect_code(ConversationError::TransportInit),ConversationError::TransportInit);
         }
         ws_started_ = true;
+        observe_connect(config.connect_observer,ConnectStage::Started);
         return {};
     }
 

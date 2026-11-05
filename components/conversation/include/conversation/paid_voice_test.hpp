@@ -4,6 +4,7 @@
 #include <mutex>
 #include <optional>
 #include "controlled_close.hpp"
+#include "connect_diagnostics.hpp"
 
 namespace stackchan::conversation {
 
@@ -57,6 +58,7 @@ public:
         CloseFailure close_failure;
         SupervisionProgress supervision;
         bool start_ready;
+        ConnectSnapshot connection;
     };
     void set_available(bool value, std::uint32_t seed = 1) {
         std::lock_guard lock{mutex_};
@@ -90,6 +92,8 @@ public:
         completed_rounds_ = 0;
         fault_ = Fault::None;
         fault_detail_ = -1;
+        connection_ = {};
+        connection_generation_ = approval_id_;
         close_required_ = close_verified_ = close_deadline_exceeded_ = false;
         close_facts_ = 0;
         close_failure_ = CloseFailure::None;
@@ -201,6 +205,12 @@ public:
         close_verified_ = close_facts_ == all_close_facts &&
             !close_deadline_exceeded_ && close_failure_ == CloseFailure::None;
     }
+    void note_connection(std::uint32_t generation, ConnectStage stage, ConnectCode code=ConnectCode::None,
+                         ConnectAttempt attempt=ConnectAttempt::None) {
+        std::lock_guard lock{mutex_};
+        if(generation!=connection_generation_ || phase_!=Phase::Running || mode_!=Mode::Paid) return;
+        connection_.record(stage,code,attempt);
+    }
     Snapshot snapshot(std::int64_t now) {
         std::lock_guard lock{mutex_};
         expire_locked(now);
@@ -211,7 +221,7 @@ public:
                 input_ready_ && running, max_rounds_locked(), completed_rounds_,
                 profile_ == Profile::Dialogue ? dialogue_idle_ms : 0, idle_left > 0 ? idle_left : 0, fault_, fault_detail_,
                 close_required_, close_verified_, close_deadline_exceeded_, close_facts_, close_failure_,supervision_,
-                available_ && phase_==Phase::Idle && (!supervised_admission_required_ || supervised_admission_ready_)};
+                available_ && phase_==Phase::Idle && (!supervised_admission_required_ || supervised_admission_ready_), connection_.snapshot()};
     }
 private:
     bool current_paid_locked(std::int64_t now, std::uint32_t expected) const {
@@ -248,6 +258,8 @@ private:
     Reason reason_{Reason::None};
     Fault fault_{Fault::None};
     int fault_detail_{-1};
+    ConnectDiagnostics connection_;
+    std::uint32_t connection_generation_{};
     Mode mode_{Mode::Paid};
     Profile profile_{Profile::SingleReply};
     bool available_{false}, input_ready_{false}, reply_pending_{false};

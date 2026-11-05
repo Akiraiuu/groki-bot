@@ -33,7 +33,9 @@ inline int esp_crt_bundle_attach(void*) { return 0; }
 struct HostQueue { unsigned capacity; std::deque<void*> items; };
 using QueueHandle_t = HostQueue*;
 inline QueueHandle_t host_last_queue{};
-inline QueueHandle_t xQueueCreate(unsigned n, unsigned) { host_last_queue = new HostQueue{n, {}}; return host_last_queue; }
+inline bool host_queue_create_fail{},host_ws_init_fail{},host_ws_start_fail{};
+inline unsigned host_ws_start_calls{};
+inline QueueHandle_t xQueueCreate(unsigned n, unsigned) { if(host_queue_create_fail)return nullptr;host_last_queue = new HostQueue{n, {}}; return host_last_queue; }
 inline int xQueueSend(QueueHandle_t q, void* p, unsigned) {
     if (q->items.size() >= q->capacity) return 0;
     q->items.push_back(*static_cast<void**>(p)); return 1;
@@ -94,6 +96,7 @@ struct HostSocket {
 using esp_websocket_client_handle_t = HostSocket*;
 inline HostSocket* host_socket{};
 inline auto esp_websocket_client_init(const esp_websocket_client_config_t* cfg) {
+    if(host_ws_init_fail)return static_cast<HostSocket*>(nullptr);
     host_socket = new HostSocket; host_socket->uri = cfg->uri;host_socket->scope=cfg->bounded_scope;host_socket->generation=cfg->bounded_generation;host_socket->deadline=cfg->bounded_deadline_us;return host_socket;
 }
 inline int esp_websocket_client_append_header(HostSocket* s, const char* k, const char* v) {
@@ -103,7 +106,7 @@ inline int esp_websocket_register_events(HostSocket* s, int,
             void(*callback)(void*, esp_event_base_t, std::int32_t, void*), void* arg) {
     s->callback = callback; s->arg = arg; return ESP_OK;
 }
-inline int esp_websocket_client_start(HostSocket* s) { s->connected = true;s->stopped=false;return ESP_OK; }
+inline int esp_websocket_client_start(HostSocket* s) { ++host_ws_start_calls;if(host_ws_start_fail)return ESP_FAIL;s->connected = true;s->stopped=false;return ESP_OK; }
 inline bool esp_websocket_client_is_connected(HostSocket* s) { return s->connected; }
 inline int esp_websocket_client_send_text(HostSocket* s, const char* p, int n, unsigned) {
     s->sent.emplace_back(p, n); return n;

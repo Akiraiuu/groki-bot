@@ -15,6 +15,7 @@
 
 #include "conversation/conversation_error.hpp"
 #include "conversation/controlled_close.hpp"
+#include "conversation/connect_diagnostics.hpp"
 
 namespace stackchan::conversation {
 
@@ -67,6 +68,7 @@ struct ConversationConfig {
     std::function<bool()> session_permitted;
     // Original approval scope end, including preparation. Required for xAI.
     std::int64_t session_deadline_us{0};
+    ConnectObserver connect_observer; // Finite diagnostics only; grants no permission.
     bool allow_multiple_turns{false}; // Only an explicitly bounded paid dialogue may reopen input.
 };
 

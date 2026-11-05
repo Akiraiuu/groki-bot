@@ -6,6 +6,7 @@
 #include <memory>
 #include <tl/expected.hpp>
 #include "conversation/conversation_error.hpp"
+#include "conversation/connect_diagnostics.hpp"
 
 namespace stackchan::conversation {
 inline constexpr const char* kSavedAgentTokenUrl =
@@ -19,6 +20,7 @@ struct TicketPreparationPermit {
     std::function<bool()> allowed;
     std::shared_ptr<void> operation_lease; // Retained on uncertain cleanup.
     std::uint32_t generation{}; // Current grant identity; one attempt per grant.
+    ConnectObserver connect_observer;
 };
 // Exactly one scoped, certificate-verified HTTPS request. No retry/NVS writes.
 // The allowed closure must own/pin its context through actual cleanup.

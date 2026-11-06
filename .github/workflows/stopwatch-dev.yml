@@ -58,7 +58,9 @@ jobs:
             --idf "$IDF_PATH" --lwip "$IDF_PATH/components/lwip/lwip" \
             --sdk "$GITHUB_WORKSPACE/build-inputs/esp_websocket_client" --apply
           make set-target BOARD=stopwatch
+          python3 tools/controlled-close/verify_m5gfx.py --project "$GITHUB_WORKSPACE"
           make build BOARD=stopwatch
+          python3 tools/controlled-close/verify_m5gfx.py --project "$GITHUB_WORKSPACE"
           python3 script/verify_wake_model.py build-stopwatch
           python3 script/pack_firmware.py --build-dir build-stopwatch --out build-stopwatch/firmware-stopwatch-grok.bin
       - name: Upload development firmware

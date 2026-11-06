@@ -1,4 +1,6 @@
 dependencies:
+  # Bound M5Unified's open-ended transitive requirement to a known build input.
+  m5stack/m5gfx: "0.2.36"
   espressif/esp_audio_codec: "^2.5.0"
   # esp-dsp: FFT for the mic lip-sync band-energy estimator
   # (main/mic_lip_sync_task.cpp). 256-point radix-2 float FFT at 16 kHz

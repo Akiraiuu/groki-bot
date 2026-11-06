@@ -5,6 +5,7 @@
 #include "conversation/saved_agent.hpp"
 #include "conversation/paid_voice_test.hpp"
 #include "conversation/session_operation_gate.hpp"
+#include "ticket_http_diagnostics.hpp"
 #include "cJSON.h"
 #include <atomic>
 #include <cassert>
@@ -83,6 +84,7 @@ static void reset(){
     check(host_pending_tasks.empty(),"all prior fake workers finished");
     host_http_init_fail=host_http_setup_fail=false;host_http_perform_result=ESP_OK;
     host_http_cleanup_result=ESP_OK;host_http_status=200;host_http_headers.clear();
+    host_last_tls_result=host_last_tls_native=host_last_tls_flags=host_last_tls_reads=0;
     host_http_body=ticket_body();host_http_perform_hook=nullptr;
     host_queue_create_fail=host_ws_init_fail=host_ws_start_fail=false;
     host_fail_heap_alloc_at_least=static_cast<std::size_t>(-1);host_fail_task_name.clear();
@@ -137,7 +139,7 @@ int main(int argc,char** argv){
     {ConnectHarness h;begin(h);h.xai_device_token_="synthetic-invalid";check(!h.connect(),"ticket configuration refused");result(h,ConnectStage::TicketConfig,ConnectCode::ProtocolError,false,false);}
     {ConnectHarness h;begin(h);host_http_init_fail=true;check(!h.connect(),"ticket client init refused");result(h,ConnectStage::TicketHttpInit,ConnectCode::TransportInit,false,false);}
     {ConnectHarness h;begin(h);host_http_setup_fail=true;check(!h.connect(),"ticket header setup failed");result(h,ConnectStage::TicketHttpSetup,ConnectCode::TransportInit,false,false);}
-    {ConnectHarness h;begin(h);host_http_perform_result=ESP_FAIL;check(!h.connect(),"ticket transport failed");result(h,ConnectStage::TicketHttpRequest,ConnectCode::TransportInit,true,false);}
+    {ConnectHarness h;begin(h);host_http_perform_result=ESP_FAIL;check(!h.connect(),"ticket transport failed");result(h,ConnectStage::TicketHttpRequest,ConnectCode::HttpOtherFailure,true,false);}
     for(auto [status,code]:{std::pair{401,ConnectCode::HttpAuth},{403,ConnectCode::HttpAuth},{302,ConnectCode::HttpRedirect},
             {429,ConnectCode::HttpClient},{503,ConnectCode::HttpServer},{204,ConnectCode::HttpOther}}){
         ConnectHarness h;begin(h);host_http_status=status;check(!h.connect(),"HTTP status failed once");result(h,ConnectStage::TicketHttpStatus,code,true,false);
@@ -182,5 +184,30 @@ int main(int argc,char** argv){
      check(!fetch_agent_ticket(kSavedAgentTokenUrl,std::string(43,'d'),permit),"direct denied ticket permit");
      check(calls==host_http_perform_calls&&!d.snapshot().ticket_http_called,"direct denial makes no HTTP call");
      check(d.snapshot().stage==ConnectStage::TicketPermit&&d.snapshot().code==ConnectCode::InvalidState,"direct ticket permit classification");++cases;}
+    for(auto [error,code]:{std::pair{ESP_ERR_HTTP_CONNECT,ConnectCode::HttpConnect},
+            {ESP_ERR_HTTP_WRITE_DATA,ConnectCode::HttpWrite},{ESP_ERR_HTTP_FETCH_HEADER,ConnectCode::HttpHeaders},
+            {ESP_ERR_HTTP_READ_TIMEOUT,ConnectCode::HttpReadTimeout},{ESP_ERR_HTTP_CONNECTION_CLOSED,ConnectCode::HttpClosed},
+            {ESP_ERR_HTTP_INCOMPLETE_DATA,ConnectCode::HttpIncomplete},{ESP_ERR_HTTP_INVALID_TRANSPORT,ConnectCode::HttpInvalidTransport},
+            {ESP_ERR_HTTP_EAGAIN,ConnectCode::HttpPending},{ESP_ERR_INVALID_STATE,ConnectCode::InvalidState},
+            {ESP_ERR_INVALID_ARG,ConnectCode::InvalidArgument},{ESP_ERR_NO_MEM,ConnectCode::OutOfMemory}}){
+        ConnectHarness h;begin(h);host_http_perform_result=error;check(!h.connect(),"specific HTTP failure classified");
+        check(host_http_perform_calls>0&&host_last_tls_reads==(error==ESP_ERR_HTTP_CONNECT?1:0),"TLS cache read only once on assigned connect transport");
+        result(h,ConnectStage::TicketHttpRequest,code,true,false);
+    }
+    {ConnectHarness h;begin(h);host_http_perform_result=ESP_ERR_HTTP_CONNECT;host_last_tls_result=ESP_ERR_ESP_TLS_CANNOT_RESOLVE_HOSTNAME;
+     check(!h.connect(),"DNS error survives ticket failure");result(h,ConnectStage::TicketHttpRequest,ConnectCode::DnsFailure,true,false);}
+    {ConnectHarness h;begin(h);host_http_perform_result=ESP_ERR_HTTP_CONNECT;host_last_tls_flags=64;host_last_tls_native=-12345;
+     check(!h.connect(),"certificate verification flags classified");result(h,ConnectStage::TicketHttpRequest,ConnectCode::TlsVerify,true,false);}
+    {ConnectHarness h;begin(h);host_http_perform_result=ESP_ERR_HTTP_CONNECT;host_last_tls_native=-12345;
+     check(!h.connect(),"TLS library error classified without publishing number");result(h,ConnectStage::TicketHttpRequest,ConnectCode::TlsLibrary,true,false);}
+    {tls_scope_snapshot s{};
+     for(auto [fault,code]:{std::pair{TLS_SCOPE_FAULT_CLOCK,ConnectCode::ScopeClock},{TLS_SCOPE_FAULT_INVARIANT,ConnectCode::ScopeInvariant},{TLS_SCOPE_FAULT_CAPACITY,ConnectCode::ScopeCapacity}}){
+        s.fault=fault;check(classify_ticket_http_failure(ESP_ERR_HTTP_CONNECT,nullptr,s)==code,"finite observed scope fault classification");
+     }
+     s.fault=TLS_SCOPE_FAULT_NONE;s.deadline_exceeded=true;
+     check(classify_ticket_http_failure(ESP_ERR_HTTP_CONNECT,nullptr,s)==ConnectCode::ScopeDeadline,"scope deadline retained");
+     s.deadline_exceeded=false;check(classify_ticket_http_failure(ESP_ERR_HTTP_CONNECT,nullptr,s)==ConnectCode::HttpConnect,"null client cannot read transport error cache");++cases;}
+    {ConnectHarness h;begin(h);check(h.connect(),"success unchanged by diagnostics");check(host_last_tls_reads==0,"no error cache read on success");
+     result(h,ConnectStage::Started,ConnectCode::None,true,true);}
     std::cout<<"connect diagnostic cases="<<cases<<" checks="<<checks<<" no real socket or model API\n";
 }

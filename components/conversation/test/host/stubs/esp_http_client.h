@@ -1,6 +1,25 @@
 // SPDX-License-Identifier: BSL-1.0
 #pragma once
 #include "host_transport.hpp"
+#define ESP_ERR_HTTP_BASE               (0x7000)                    /*!< Starting number of HTTP error codes */
+#define ESP_ERR_HTTP_MAX_REDIRECT       (ESP_ERR_HTTP_BASE + 1)     /*!< The error exceeds the number of HTTP redirects */
+#define ESP_ERR_HTTP_CONNECT            (ESP_ERR_HTTP_BASE + 2)     /*!< Error open the HTTP connection */
+#define ESP_ERR_HTTP_WRITE_DATA         (ESP_ERR_HTTP_BASE + 3)     /*!< Error write HTTP data */
+#define ESP_ERR_HTTP_FETCH_HEADER       (ESP_ERR_HTTP_BASE + 4)     /*!< Error read HTTP header from server */
+#define ESP_ERR_HTTP_INVALID_TRANSPORT  (ESP_ERR_HTTP_BASE + 5)     /*!< There are no transport support for the input scheme */
+#define ESP_ERR_HTTP_CONNECTING         (ESP_ERR_HTTP_BASE + 6)     /*!< HTTP connection hasn't been established yet */
+#define ESP_ERR_HTTP_EAGAIN             (ESP_ERR_HTTP_BASE + 7)     /*!< Mapping of errno EAGAIN to esp_err_t */
+#define ESP_ERR_HTTP_CONNECTION_CLOSED  (ESP_ERR_HTTP_BASE + 8)     /*!< Read FIN from peer and the connection closed */
+#define ESP_ERR_HTTP_NOT_MODIFIED       (ESP_ERR_HTTP_BASE + 9)     /*!< HTTP 304 Not Modified, no update available */
+#define ESP_ERR_HTTP_RANGE_NOT_SATISFIABLE (ESP_ERR_HTTP_BASE + 10) /*!< HTTP 416 Range Not Satisfiable, requested range in header is incorrect */
+#define ESP_ERR_HTTP_READ_TIMEOUT       (ESP_ERR_HTTP_BASE + 11)    /*!< HTTP data read timeout */
+#define ESP_ERR_HTTP_INCOMPLETE_DATA    (ESP_ERR_HTTP_BASE + 12)    /*!< Incomplete data received, less than Content-Length or last chunk */
+#define ESP_ERR_HTTP_REDIRECT_DOWNGRADE (ESP_ERR_HTTP_BASE + 13)   /*!< HTTPS origin redirected to a non-HTTPS scheme (downgrade blocked) */
+#define ESP_ERR_NO_MEM 0x101
+#define ESP_ERR_INVALID_ARG 0x102
+#define ESP_ERR_INVALID_STATE 0x103
+inline int host_last_tls_result{},host_last_tls_native{},host_last_tls_flags{},host_last_tls_reads{};
+
 enum {HTTP_EVENT_ON_DATA, HTTP_EVENT_ON_HEADER, HTTP_METHOD_POST};
 struct esp_http_client_event_t {int event_id{}, data_len{}; void* data{}; void* user_data{}; char* header_key{}; char* header_value{};};
 struct esp_http_client_config_t {
@@ -48,4 +67,11 @@ inline int esp_http_client_cleanup(HostHttp*h) {
     if(claim==TLS_SCOPE_PENDING)return -2;
     if(claim==TLS_SCOPE_ALREADY)return ESP_OK;
     return claim==TLS_SCOPE_OK && tls_scope_close_finish(h->config.bounded_scope,h->config.bounded_generation,fd,0)==TLS_SCOPE_OK?ESP_OK:ESP_FAIL;
+}
+
+inline int esp_http_client_get_and_clear_last_tls_error(esp_http_client_handle_t client,int* code,int*flags){
+    if(!client)return ESP_FAIL;
+    ++host_last_tls_reads;*code=host_last_tls_native;*flags=host_last_tls_flags;
+    const auto result=host_last_tls_result;host_last_tls_result=host_last_tls_native=host_last_tls_flags=0;
+    return result;
 }

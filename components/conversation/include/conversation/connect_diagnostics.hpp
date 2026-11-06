@@ -18,7 +18,10 @@ enum class ConnectStage : std::uint8_t {
 enum class ConnectCode : std::uint8_t {
     None, NotConnected, TransportInit, SendFailed, ProtocolError, ServerError,
     Timeout, InvalidState, OutOfMemory, Busy, BodyLimit, Cleanup,
-    HttpAuth, HttpRedirect, HttpClient, HttpServer, HttpOther, Unknown
+    HttpAuth, HttpRedirect, HttpClient, HttpServer, HttpOther,
+    HttpConnect, HttpWrite, HttpHeaders, HttpReadTimeout, HttpClosed, HttpIncomplete,
+    HttpInvalidTransport, HttpPending, HttpOtherFailure, InvalidArgument,
+    DnsFailure, TlsVerify, TlsLibrary, ScopeClock, ScopeInvariant, ScopeCapacity, ScopeDeadline, Unknown
 };
 enum class ConnectAttempt : std::uint8_t { None, TicketHttp, WebsocketStart };
 inline const char* connect_stage_name(ConnectStage s) {
@@ -35,7 +38,10 @@ inline const char* connect_code_name(ConnectCode c) {
     constexpr const char* names[]={"none","not_connected","transport_init","send_failed",
         "protocol_error","server_error","timeout","invalid_state","out_of_memory","busy",
         "body_limit","cleanup","http_auth","http_redirect","http_client","http_server",
-        "http_other","unknown"};
+        "http_other","http_connect","http_write","http_headers","http_read_timeout",
+        "http_closed","http_incomplete","http_invalid_transport","http_pending","http_other_failure",
+        "invalid_argument","dns_failure","tls_verify","tls_library","scope_clock","scope_invariant",
+        "scope_capacity","scope_deadline","unknown"};
     const auto n=static_cast<unsigned>(c);
     return n<sizeof(names)/sizeof(*names)?names[n]:"unknown";
 }

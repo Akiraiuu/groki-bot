@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: BSL-1.0
 #include "conversation/saved_agent.hpp"
 #include "saved_agent_protocol.hpp"
+#include "ticket_http_diagnostics.hpp"
 #include <chrono>
 #include <ctime>
 #include <esp_log.h>
@@ -121,9 +122,12 @@ tl::expected<AgentTicket, ConversationError> fetch_agent_ticket(
         result=ESP_FAIL;
     }
     const int status = esp_http_client_get_status_code(client);
+    // Read only finite categories before cleanup clears errors or cancels scope.
+    const auto request_failure=result==ESP_OK?ConnectCode::None:
+        classify_ticket_http_failure(result,client,tls_scope_observe(&owner->scope,1,esp_timer_get_time()));
     // Capture the first request failure before cleanup can report another failure.
     if(body.overflow)observe_connect(permit.connect_observer,ConnectStage::TicketHttpRequest,ConnectCode::BodyLimit);
-    else if(result!=ESP_OK)observe_connect(permit.connect_observer,ConnectStage::TicketHttpRequest,ConnectCode::TransportInit);
+    else if(result!=ESP_OK)observe_connect(permit.connect_observer,ConnectStage::TicketHttpRequest,request_failure);
     else if(status!=200)observe_connect(permit.connect_observer,ConnectStage::TicketHttpStatus,connect_http_code(status));
     observe_connect(permit.connect_observer,ConnectStage::TicketHttpCleanup);
     tls_scope_cancel(&owner->scope,1);
@@ -140,7 +144,7 @@ tl::expected<AgentTicket, ConversationError> fetch_agent_ticket(
     }
     ticket_operation_busy.store(false,std::memory_order_release);
     if(!owner->allowed())return fail(ConnectStage::TicketPermit,ConnectCode::Timeout,ConversationError::Timeout);
-    if (result != ESP_OK || body.overflow) return fail(ConnectStage::TicketHttpRequest,body.overflow?ConnectCode::BodyLimit:ConnectCode::TransportInit,ConversationError::TransportInit);
+    if (result != ESP_OK || body.overflow) return fail(ConnectStage::TicketHttpRequest,body.overflow?ConnectCode::BodyLimit:request_failure,ConversationError::TransportInit);
     if (status != 200) return fail(ConnectStage::TicketHttpStatus,connect_http_code(status),ConversationError::ServerError);
     const auto local_now = std::time(nullptr);
     double reference_now = local_now;

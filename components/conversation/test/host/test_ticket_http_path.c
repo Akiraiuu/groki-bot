@@ -100,7 +100,11 @@ static void*esp_transport_get_error_handle(esp_transport_handle_t t){(void)t;ret
 static void esp_http_client_cached_buf_cleanup(void*b){(void)b;}
 static int esp_http_client_set_header(esp_http_client_handle_t c,const char*k,const char*v){(void)c;(void)k;(void)v;return ESP_OK;}
 static bool http_utils_assign_string(char**dest,const char*s,int length){
-    if(length<0)length=(int)strlen(s);char*copy=malloc((size_t)length+1);if(!copy)return false;
+    if(length<0){
+        length=(int)strlen(s);
+    }
+    char*copy=malloc((size_t)length+1);
+    if(!copy)return false;
     memcpy(copy,s,(size_t)length);copy[length]=0;free(*dest);*dest=copy;return true;
 }
 static int http_utils_get_string_between(char*s,const char*a,const char*b,char**o){(void)s;(void)a;(void)b;(void)o;return ESP_FAIL;}

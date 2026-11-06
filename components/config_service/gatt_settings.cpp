@@ -1318,12 +1318,7 @@ static int gatt_access_cb(uint16_t /*conn_handle*/, uint16_t attr_handle,
             return 0;
         }
         if (attr_handle == g_xai_key_handle) {
-            if (pt.size() > 256) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
-            std::string val(reinterpret_cast<const char*>(pt.data()), pt.size());
-            xSemaphoreTake(g_mutex, portMAX_DELAY);
-            g_staging.set_str("xai-api-key", std::move(val));
-            xSemaphoreGive(g_mutex);
-            return 0;
+            return BLE_ATT_ERR_WRITE_NOT_PERMITTED; // retired prototype credential path
         }
         if (attr_handle == g_xiaozhi_url_handle) {
             if (pt.size() > 256) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;

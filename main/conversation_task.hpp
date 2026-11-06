@@ -37,6 +37,8 @@ struct ConversationTaskArgs {
     // Extra HTTP headers for the conversation WebSocket upgrade (e.g. a
     // Cloudflare Access service token). Newline-separated "Name: value" lines.
     const char* extra_headers = "";
+    const char* xai_token_url = "";
+    const char* xai_device_token = "";
     // Internal-RAM playback ring, pre-allocated by app_main in the boot-time
     // low-fragmentation window. We can't allocate this lazily from the
     // conversation task: by the time it runs (post Wi-Fi association, ~12 s

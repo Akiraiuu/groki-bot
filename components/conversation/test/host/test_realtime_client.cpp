@@ -9,7 +9,7 @@ int main() {
     OpenAiRealtimeClient client("xai-test-only", RealtimeBackend::Xai);
     std::vector<ConversationEvent> events;
     client.set_event_callback([&](const auto& ev) { events.push_back(ev); });
-    ConversationConfig cfg;
+    ConversationConfig cfg;cfg.session_deadline_us=60000000;
     cfg.model = "grok-voice-latest"; cfg.voice = "eve";
     cfg.input_sample_rate_hz = cfg.output_sample_rate_hz = 8000;
     assert(client.start(cfg));
@@ -23,6 +23,9 @@ int main() {
     assert(client.state() == ConversationState::Listening);
     host_receive(R"({"type":"input_audio_buffer.speech_stopped"})");
     assert(client.state() == ConversationState::Thinking);
+    const std::int16_t generic_sample = 1;
+    assert(client.push_audio(std::span<const std::int16_t>{&generic_sample, 1}));
+    assert(uxQueueMessagesWaiting(host_last_queue) == 0); // legacy path still drops input here
     host_receive(R"({"type":"response.created"})");
     host_receive(R"({"type":"response.output_audio.delta","delta":"/w=="})");
     assert(client.state() == ConversationState::Speaking);
@@ -48,7 +51,7 @@ int main() {
     assert(host_socket->sent.size() == sent); // already finished: no spurious cancel
     host_receive(R"({"type":"error","error":{"message":"network test"}})");
     assert(events.back().type == ConversationEventType::Error); // errors remain visible
-    client.stop();
+    client.stop(); host_run_all_tasks();
     assert(client.state() == ConversationState::Idle);
     // Reconnection resets the cancellation gate and sends credentials again.
     assert(client.start(cfg)); host_connected();
@@ -56,11 +59,11 @@ int main() {
     host_receive(R"({"type":"response.created"})");
     host_receive(R"({"type":"response.audio.delta","delta":"/w=="})");
     assert(events.back().type == ConversationEventType::AssistantAudioChunk);
-    client.stop();
+    client.stop(); host_run_all_tasks();
 
     // Default constructor retains the upstream OpenAI endpoint.
     OpenAiRealtimeClient openai("openai-test-only"); cfg.model = "gpt-realtime";
     assert(openai.start(cfg));
     assert(host_socket->uri == "wss://api.openai.com/v1/realtime?model=gpt-realtime");
-    openai.stop();
+    openai.stop(); host_run_all_tasks();
 }

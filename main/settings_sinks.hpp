@@ -27,6 +27,10 @@ namespace stackchan::app::settings_sinks {
 // attach_state() flips them live. Call once, before any register_*().
 void attach_state(SharedState& state);
 
+// Set once at boot before sink registration. The explicitly scoped voice
+// coordinator owns I2S; settings/MCP local speech must not bypass its leases.
+void set_exclusive_voice_audio(bool enabled);
+
 // kana (ひらがな) を発話タスクで喋る。ASR ウェイクワードの返事等から使う。
 void say_kana(std::string_view kana_utf8);
 

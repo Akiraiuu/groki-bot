@@ -1,0 +1,140 @@
+{
+  "idf_commit": "3ea97e7591b6a83f5d6f8e0cc7f1b16f27b2b855",
+  "lwip_commit": "c6f2f878e7b0f86033214b85547d579be43351e3",
+  "sdk_version": "1.8.0",
+  "files": [
+    {
+      "kind": "idf",
+      "path": "components/esp-tls/CMakeLists.txt",
+      "candidate": "idf/candidate/components/esp-tls/CMakeLists.txt",
+      "original_sha256": "000ee80871db3235d3318e36f08da11921157e32c0c31404516b36ab3f624e13",
+      "candidate_sha256": "ab03498dcdb7118bc5371180b1beafd50163734e128e2c733fb3855ae6c63ee5"
+    },
+    {
+      "kind": "idf",
+      "path": "components/esp-tls/esp_tls.c",
+      "candidate": "idf/candidate/components/esp-tls/esp_tls.c",
+      "original_sha256": "71c5605e2536fa0e876c98d453b6a3a860ab9d0fe38d86cc002eeb8020459cff",
+      "candidate_sha256": "3b340cdbdd52b15b2ea505ecb229c6d096578651ff243b217709427fa72c070e"
+    },
+    {
+      "kind": "idf",
+      "path": "components/esp-tls/esp_tls.h",
+      "candidate": "idf/candidate/components/esp-tls/esp_tls.h",
+      "original_sha256": "64147e17499efbd6c621c6d6d6eb664dc8cbd72a704f574d0258fe82b5c2fe48",
+      "candidate_sha256": "a40dc7b761e1412e35badf31d830a8f109c9de0f78739bf589a34db9b6c074a0"
+    },
+    {
+      "kind": "idf",
+      "path": "components/esp-tls/esp_tls_mbedtls.c",
+      "candidate": "idf/candidate/components/esp-tls/esp_tls_mbedtls.c",
+      "original_sha256": "5893293732ba4a73990bb9beb048fdf95e9c8931cb8f6acb43fde46590c54735",
+      "candidate_sha256": "f250088965179f6d3549279c5b87a17880d0d3b626237ed22dea11422b6a861d"
+    },
+    {
+      "kind": "idf",
+      "path": "components/esp-tls/esp_tls_scope.c",
+      "candidate": "idf/candidate/components/esp-tls/esp_tls_scope.c",
+      "original_sha256": null,
+      "candidate_sha256": "0b217b9354aba2c97773784eb5a67da5c4d3688c0a74cf8938dde38dc6b59b20"
+    },
+    {
+      "kind": "idf",
+      "path": "components/esp-tls/esp_tls_scope.h",
+      "candidate": "idf/candidate/components/esp-tls/esp_tls_scope.h",
+      "original_sha256": null,
+      "candidate_sha256": "feb675f0ed2fd425e85237009681182093296cd7449217b1383f485d91be00e4"
+    },
+    {
+      "kind": "idf",
+      "path": "components/esp-tls/esp_tls_scope_resolver.c",
+      "candidate": "idf/candidate/components/esp-tls/esp_tls_scope_resolver.c",
+      "original_sha256": null,
+      "candidate_sha256": "bf5e230f15c0a5832f6c5305f83f61215dc6a27d2586776d5f47815761c13697"
+    },
+    {
+      "kind": "idf",
+      "path": "components/esp-tls/esp_tls_scope_resolver.h",
+      "candidate": "idf/candidate/components/esp-tls/esp_tls_scope_resolver.h",
+      "original_sha256": null,
+      "candidate_sha256": "adaa9c3360a712dd11dc3bc62993540fd232e1c1e79e39268f2b1f81d62c39fb"
+    },
+    {
+      "kind": "idf",
+      "path": "components/esp-tls/private_include/esp_tls_private.h",
+      "candidate": "idf/candidate/components/esp-tls/private_include/esp_tls_private.h",
+      "original_sha256": "ad80965c486a780460f0f0e4ebcbef4dad2307790381ce11d15dbfbd98c17bb5",
+      "candidate_sha256": "2ec8f910831b03f3f5081a6893f98be0ad0bfb0821ce9fb1fa498253befc7a9a"
+    },
+    {
+      "kind": "idf",
+      "path": "components/esp_http_client/CMakeLists.txt",
+      "candidate": "idf/candidate/components/esp_http_client/CMakeLists.txt",
+      "original_sha256": "e849ca25c09e5dafa4354e99275435e970431a094caef119a53b4955afefc8bc",
+      "candidate_sha256": "31b8f53a323a50f8bcad95a8a2604e05b0acb3d7167bf4791d406803911495c6"
+    },
+    {
+      "kind": "idf",
+      "path": "components/esp_http_client/esp_http_client.c",
+      "candidate": "idf/candidate/components/esp_http_client/esp_http_client.c",
+      "original_sha256": "b893b595004aa14c8fe4b4da974cac16be7517abd64fe2c63e77e7ec9b2e9d71",
+      "candidate_sha256": "bb919ceb155571989720700ad17066fb9e57f20b1994837e9585f2188445b1e7"
+    },
+    {
+      "kind": "idf",
+      "path": "components/esp_http_client/include/esp_http_client.h",
+      "candidate": "idf/candidate/components/esp_http_client/include/esp_http_client.h",
+      "original_sha256": "4b78a3013f5df73aa55afe943521a25eaf8990b8eabc4775916c171a96ba91b8",
+      "candidate_sha256": "736accaff47289b7b0af7b27ec82a54bf281dfff3685c3df8f6d5d5e69fa4c6a"
+    },
+    {
+      "kind": "idf",
+      "path": "components/tcp_transport/include/esp_transport_ssl.h",
+      "candidate": "idf/candidate/components/tcp_transport/include/esp_transport_ssl.h",
+      "original_sha256": "e9e1d12c5e70b289df1e6ea052de8012604a965a8d3efeb6efee8326a7b2a99d",
+      "candidate_sha256": "8a973d8ecd10751daac1c3af4d055d4be6e2dd48f74cce4f883ca10d5c55a894"
+    },
+    {
+      "kind": "idf",
+      "path": "components/tcp_transport/transport.c",
+      "candidate": "idf/candidate/components/tcp_transport/transport.c",
+      "original_sha256": "777b8f7d41ea0a1afc50e860a41520eb2deefc0ea1e88b901e2b8ab5d30088a9",
+      "candidate_sha256": "650aff7acd224d3af463e36d37dd352e942e496c6d216c0707d97c25cd093dc7"
+    },
+    {
+      "kind": "idf",
+      "path": "components/tcp_transport/transport_ssl.c",
+      "candidate": "idf/candidate/components/tcp_transport/transport_ssl.c",
+      "original_sha256": "1b9e42e556f8ef85d441950d0487eca77a8e9bde8293d7f0332f0826f08f6bde",
+      "candidate_sha256": "45a0989c43002f882e86a0aa4b45cf75f2421103d9605fabde7873500acb7ece"
+    },
+    {
+      "kind": "sdk",
+      "path": "esp_websocket_client.c",
+      "candidate": "sdk/candidate/esp_websocket_client.c",
+      "original_sha256": "18041ec37d3456bc1ecb3275a78c3ae64679f57f049b5b05af169ef6b1857c77",
+      "candidate_sha256": "c971dcb29e956813de47c90d619b12bb3cc88e8d2a6aeb484a85a6380de6b017"
+    },
+    {
+      "kind": "sdk",
+      "path": "include/esp_websocket_client.h",
+      "candidate": "sdk/candidate/esp_websocket_client.h",
+      "original_sha256": "382fdce725ff80c15172e2850dcb41702a655857bed76fff7ac4e9c811311cfa",
+      "candidate_sha256": "c75857fefb65212e176e758158659d3f52fa12bdb910f05732ff975e0124b21d"
+    },
+    {
+      "kind": "lwip",
+      "path": "src/core/dns.c",
+      "candidate": "lwip/candidate/src/core/dns.c",
+      "original_sha256": "093db183c58a0e420277d209f9e070131d5728dec1687ca99394b5d847a7ad55",
+      "candidate_sha256": "72fcac30bd09b83ef15dbe296ebdb9a4a5c7386cac658b7d9a02a2c21ad21fb2"
+    },
+    {
+      "kind": "lwip",
+      "path": "src/include/lwip/dns.h",
+      "candidate": "lwip/candidate/src/include/lwip/dns.h",
+      "original_sha256": "0634a3ab42efa3d2aa2cca94069d8470ab196b1d772fa9a28b304f85fb9bf6f9",
+      "candidate_sha256": "a4a6b49a97af12ab060ff78ac72d5e3dbb5baa6fa1a633ea360e48ad988c8b13"
+    }
+  ]
+}

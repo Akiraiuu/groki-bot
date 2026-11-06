@@ -118,7 +118,15 @@ inline float read_var(Var v, const avatar::Canvas& canvas, const avatar::DrawCon
         const auto id = static_cast<std::uint8_t>(v);
         const auto base = static_cast<std::uint8_t>(Var::RingBase);
         if (id >= base && id < base + kRingVarCount && ctx.aora_ring != nullptr) {
-            return ctx.aora_ring[id - base];
+            // The ring compositor emits 320x240 DESIGN coordinates. The DSL
+            // draws these variables directly, so map them exactly like tx/ty
+            // here. Raw values only happened to work on a 320x240 display;
+            // on the 466x466 StopWatch they put the eyes outside the face.
+            const auto index = id - base;
+            const float value = ctx.aora_ring[index];
+            return (index & 1) != 0
+                ? canvas.height() / 2.0f + (value - 120.0f) * scale
+                : canvas.width() / 2.0f + (value - 160.0f) * scale;
         }
         return 0.0f;
     }

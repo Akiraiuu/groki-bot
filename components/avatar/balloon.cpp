@@ -42,6 +42,10 @@ void draw_balloon(RichCanvas& canvas, DrawContext& ctx)
     if (text.empty()) {
         return;
     }
+    if (ctx.balloon_start_pending) {
+        ctx.balloon_set_ms = ctx.now_ms;
+        ctx.balloon_start_pending = false;
+    }
 
     const std::uint16_t fg = ctx.palette.balloon_foreground;
     const std::uint16_t bg = ctx.palette.balloon_background;

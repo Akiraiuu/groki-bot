@@ -4,12 +4,14 @@ idf_component_register(
         "gemini_live_client.cpp"
         "xiaozhi_client.cpp"
         "base64.cpp"
+        "saved_agent.cpp"
     INCLUDE_DIRS "include"
     PRIV_INCLUDE_DIRS "."
     REQUIRES
         tl_expected
     PRIV_REQUIRES
         esp_websocket_client
+        esp_http_client
         esp_audio_codec
         json
         mbedtls

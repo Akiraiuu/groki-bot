@@ -27,6 +27,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -75,6 +76,7 @@ jobs:
   host-tests:
     name: Host unit tests (gcc)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -88,6 +90,9 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends cmake g++ ninja-build libmbedtls-dev
+
+      - name: Verify one-shot pinned SDK input preparation (offline fixtures)
+        run: python -m unittest discover -s tools/controlled-close -p 'test_*.py' -v
 
       - name: Show toolchain versions
         run: |
@@ -196,6 +201,7 @@ jobs:
   gateway-tests:
     name: Gateway tests (Python)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: gateway

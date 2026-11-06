@@ -7,8 +7,8 @@
 // see third_party/emotion-ball/.
 //
 // aora eye-ring compositor: using DrawContext's four expression weight sets, blends the eye-ring
-// contours in aora_ring_data.hpp point by point into this frame's 96 screen points (l0x,l0y..r47y,
-// 192 floats), which the avatar VM reads through the Var::RingBase range and draws.
+// contours in aora_ring_data.hpp point by point into 96 design points (l0x,l0y..r47y,
+// 192 floats). The VM maps Var::RingBase to the actual canvas before drawing.
 //
 // Each expression has its own ring pool and rotation rhythm: a ring change eases point by point over a
 // 340 ms smooth step (close to aora's spring interpolation); behaviour animations (sine/glance/jitter/scan)
@@ -18,6 +18,7 @@
 #pragma once
 
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 
 #include "aora_ring_data.hpp"
@@ -27,6 +28,9 @@
 namespace stackchan::app::aora {
 
 inline constexpr std::size_t kOutFloats = 192;
+// Symmetric eye centres in the 320x240 design, inside the body at (160,120).
+inline constexpr float kForwardEyeX[2] = {128.0f, 192.0f};
+inline constexpr float kForwardEyeY = 110.0f;
 
 namespace detail {
 
@@ -166,12 +170,12 @@ inline void compose(const avatar::DrawContext& ctx, std::uint32_t now_ms, float*
     }
 
     // Eye orbit (the former DSL orbit: an 8-segment small circle lasting 1.2 s every 17.9 s) + gaze offset.
-    float ox = ctx.gaze_horizontal + ctx.gaze_saccade_h;
-    float oy = ctx.gaze_vertical + ctx.gaze_saccade_v;
+    float ox = ctx.fixed_gaze_enabled ? 0.0f : ctx.gaze_horizontal + ctx.gaze_saccade_h;
+    float oy = ctx.fixed_gaze_enabled ? 0.0f : ctx.gaze_vertical + ctx.gaze_saccade_v;
     ox *= 4.0f;
     oy *= 3.0f;
     const std::uint32_t ot = (now_ms + 5900u) % 17900u;
-    if (ot < 1200) {
+    if (!ctx.fixed_gaze_enabled && ot < 1200) {
         const float p = static_cast<float>(ot) / 1200.0f;
         float env = 1.0f;
         if (p < 0.12f) {
@@ -217,14 +221,21 @@ inline void compose(const avatar::DrawContext& ctx, std::uint32_t now_ms, float*
             lid = 1.0f;
         }
         float* dst = out + side * kRingPoints * 2;
+        float cx = 0.0f;
         float cy = 0.0f;
-        for (std::size_t i = 1; i < kRingPoints * 2; i += 2) {
-            cy += dst[i];
+        for (std::size_t i = 0; i < kRingPoints * 2; i += 2) {
+            cx += dst[i];
+            cy += dst[i + 1];
         }
+        cx /= static_cast<float>(kRingPoints);
         cy /= static_cast<float>(kRingPoints);
         for (std::size_t i = 0; i < kRingPoints * 2; i += 2) {
-            dst[i] += ox;
-            dst[i + 1] = cy + (dst[i + 1] - cy) * lid + oy;
+            // Ring pools contain baked-in side looks as well as animated
+            // translations. Recenter the final contour, preserving its shape
+            // and eyelid squash, so every expression continues to face front.
+            dst[i] += ctx.fixed_gaze_enabled ? kForwardEyeX[side] - cx : ox;
+            const float center_y = ctx.fixed_gaze_enabled ? kForwardEyeY : cy;
+            dst[i + 1] = center_y + (dst[i + 1] - cy) * lid + oy;
         }
     }
 }

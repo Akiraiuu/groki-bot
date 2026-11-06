@@ -161,6 +161,12 @@ DeviceConfig load()
         }
     }
     nvs_close(h);
+    // Retire the early prototype's long-term xAI key. No longer load or accept it.
+    nvs_handle_t migration;
+    if (nvs_open(kNs, NVS_READWRITE, &migration) == ESP_OK) {
+        if (nvs_erase_key(migration, "xai_key") == ESP_OK) nvs_commit(migration);
+        nvs_close(migration);
+    }
     return cfg;
 }
 

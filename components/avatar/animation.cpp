@@ -62,7 +62,7 @@ void FaceAnimator::tick(std::uint32_t now_ms, DrawContext& ctx)
     } else {
         ctx.breath = 0.0f;
     }
-    if (params.saccade_enabled) {
+    if (params.saccade_enabled && !ctx.fixed_gaze_enabled) {
         if (now_ms >= saccade_next_ms_) {
             saccade_tick(now_ms, ctx);
         }

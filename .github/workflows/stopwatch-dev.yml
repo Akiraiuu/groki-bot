@@ -25,7 +25,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 35
     container:
-      image: espressif/idf:release-v5.5
+      image: espressif/idf@sha256:851f136a2c09cf17c13e952b9975606d7d1050be1480b1fd82c7ea4bce78cfb3
     steps:
       - uses: actions/checkout@v4
         with:
@@ -47,8 +47,21 @@ jobs:
         run: |
           set -euo pipefail
           . "$IDF_PATH/export.sh"
+          test "$IDF_PATH" = /opt/esp/idf
+          git config --global --add safe.directory "$IDF_PATH"
+          test -z "$(git -C "$IDF_PATH" status --porcelain --untracked-files=no)"
+          git -C "$IDF_PATH" fetch --no-tags --depth=1 origin 3ea97e7591b6a83f5d6f8e0cc7f1b16f27b2b855
+          git -C "$IDF_PATH" checkout --detach 3ea97e7591b6a83f5d6f8e0cc7f1b16f27b2b855
+          git -C "$IDF_PATH" submodule update --init --recursive --depth=1
+          python3 tools/controlled-close/prepare_sdk.py
+          python3 patches/stopwatch-controlled-close/overlay/prepare-pinned-overlay-v03.py \
+            --idf "$IDF_PATH" --lwip "$IDF_PATH/components/lwip/lwip" \
+            --sdk "$GITHUB_WORKSPACE/build-inputs/esp_websocket_client" --apply
           make set-target BOARD=stopwatch
+          python3 tools/controlled-close/verify_m5gfx.py --project "$GITHUB_WORKSPACE"
           make build BOARD=stopwatch
+          python3 tools/controlled-close/verify_m5gfx.py --project "$GITHUB_WORKSPACE"
+          python3 script/verify_wake_model.py build-stopwatch
           python3 script/pack_firmware.py --build-dir build-stopwatch --out build-stopwatch/firmware-stopwatch-grok.bin
       - name: Upload development firmware
         uses: actions/upload-artifact@v4
@@ -64,3 +77,14 @@ jobs:
             build-stopwatch/ota_data_initial.bin
             build-stopwatch/flash_args
             build-stopwatch/flasher_args.json
+            build-stopwatch/srmodels/srmodels.bin
+            build-stopwatch/wake-model-validation.json
+      - name: Upload StopWatch debug symbols
+        uses: actions/upload-artifact@v4
+        with:
+          name: stopwatch-debug-${{ github.sha }}
+          retention-days: 7
+          if-no-files-found: error
+          path: |
+            build-stopwatch/stackchan_idf.elf
+            build-stopwatch/stackchan_idf.map

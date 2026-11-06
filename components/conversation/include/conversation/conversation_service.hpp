@@ -14,6 +14,8 @@
 #include <tl/expected.hpp>
 
 #include "conversation/conversation_error.hpp"
+#include "conversation/controlled_close.hpp"
+#include "conversation/connect_diagnostics.hpp"
 
 namespace stackchan::conversation {
 
@@ -45,6 +47,8 @@ struct ToolDefinition {
 };
 
 struct ConversationConfig {
+    // Nonempty only for a saved xAI Agent. Persona/voice/tools stay server-side.
+    std::string agent_id;
     std::string instructions; // persona / system prompt
     std::string voice;
     std::string model;
@@ -59,6 +63,13 @@ struct ConversationConfig {
     std::uint32_t vad_silence_ms{500};
     std::uint32_t vad_prefix_padding_ms{300};
     float vad_threshold{0.5f};
+    // Saved-Agent transport must check a live RAM-only permission before
+    // opening the socket, queueing audio and each actual network write.
+    std::function<bool()> session_permitted;
+    // Original approval scope end, including preparation. Required for xAI.
+    std::int64_t session_deadline_us{0};
+    ConnectObserver connect_observer; // Finite diagnostics only; grants no permission.
+    bool allow_multiple_turns{false}; // Only an explicitly bounded paid dialogue may reopen input.
 };
 
 enum class ConversationEventType : std::uint8_t {
@@ -148,6 +159,11 @@ public:
     // Tear down the session.
     virtual void stop() = 0;
 
+    // Explicit application quiescence boundary. Never wait for transport here.
+    // Unsupported backends must not be treated as closed by the caller.
+    virtual void begin_controlled_close() {}
+    virtual ControlledCloseSnapshot controlled_close_snapshot() const { return {}; }
+
     // Feed a chunk of microphone PCM16 (mono, ConversationConfig sample rate).
     virtual tl::expected<void, ConversationError> push_audio(std::span<const std::int16_t> pcm) = 0;
 
@@ -163,6 +179,12 @@ public:
     // Interrupt the assistant's in-progress response (barge-in): stop the
     // backend generating/streaming and return the session to listening.
     virtual tl::expected<void, ConversationError> cancel_response() = 0;
+
+    // Reopen only after a finished reply, within the SAME active permission.
+    // The default refuses; it must never connect or request a new token.
+    virtual tl::expected<void, ConversationError> begin_input_turn() {
+        return tl::unexpected{ConversationError::InvalidState};
+    }
 
     virtual ConversationState state() const = 0;
 

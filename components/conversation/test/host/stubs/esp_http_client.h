@@ -20,10 +20,11 @@
 #define ESP_ERR_INVALID_STATE 0x103
 inline int host_last_tls_result{},host_last_tls_native{},host_last_tls_flags{},host_last_tls_reads{};
 
+enum {HTTP_TRANSPORT_UNKNOWN, HTTP_TRANSPORT_OVER_TCP, HTTP_TRANSPORT_OVER_SSL};
 enum {HTTP_EVENT_ON_DATA, HTTP_EVENT_ON_HEADER, HTTP_METHOD_POST};
 struct esp_http_client_event_t {int event_id{}, data_len{}; void* data{}; void* user_data{}; char* header_key{}; char* header_value{};};
 struct esp_http_client_config_t {
-    const char* url{}; int method{}, timeout_ms{}, max_authorization_retries{};
+    const char* url{}; int method{}, timeout_ms{}, max_authorization_retries{}, transport_type{};
     bool disable_auto_redirect{};esp_tls_scope*bounded_scope{};std::uint32_t bounded_generation{};
     int (*crt_bundle_attach)(void*){};
     int (*event_handler)(esp_http_client_event_t*){};

@@ -208,6 +208,7 @@ int main(int argc,char** argv){
      check(classify_ticket_http_failure(ESP_ERR_HTTP_CONNECT,nullptr,s)==ConnectCode::ScopeDeadline,"scope deadline retained");
      s.deadline_exceeded=false;check(classify_ticket_http_failure(ESP_ERR_HTTP_CONNECT,nullptr,s)==ConnectCode::HttpConnect,"null client cannot read transport error cache");++cases;}
     {ConnectHarness h;begin(h);check(h.connect(),"success unchanged by diagnostics");check(host_last_tls_reads==0,"no error cache read on success");
+     check(host_http.config.transport_type==HTTP_TRANSPORT_OVER_SSL,"ticket explicitly chooses SSL before SDK URL initialization");
      result(h,ConnectStage::Started,ConnectCode::None,true,true);}
     std::cout<<"connect diagnostic cases="<<cases<<" checks="<<checks<<" no real socket or model API\n";
 }

@@ -93,6 +93,9 @@ tl::expected<AgentTicket, ConversationError> fetch_agent_ticket(
     }
     esp_http_client_config_t config{};
     config.url = url.c_str();
+    // Keep initial transport defaults aligned with the fixed HTTPS endpoint.
+    // A later 80-to-443 URL change would close and cancel the bounded scope.
+    config.transport_type = HTTP_TRANSPORT_OVER_SSL;
     config.method = HTTP_METHOD_POST;
     config.timeout_ms = static_cast<int>(std::max<std::int64_t>(1,request_budget/1000));
     config.bounded_scope=&owner->scope;config.bounded_generation=1;

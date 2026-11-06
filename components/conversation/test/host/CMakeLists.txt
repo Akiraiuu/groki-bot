@@ -211,7 +211,7 @@ set_tests_properties(connect_cleanup_failure connect_first_fault_before_cleanup 
 
 # HTTP/SSL/TLS admission using exact frozen method bodies, no network or crypto.
 set(TICKET_PATH_DIR "${CMAKE_CURRENT_BINARY_DIR}/ticket-http-path")
-add_custom_command(OUTPUT "${TICKET_PATH_DIR}/tls.inc" "${TICKET_PATH_DIR}/ssl.inc" "${TICKET_PATH_DIR}/http.inc"
+add_custom_command(OUTPUT "${TICKET_PATH_DIR}/tls.inc" "${TICKET_PATH_DIR}/ssl.inc" "${TICKET_PATH_DIR}/http.inc" "${TICKET_PATH_DIR}/http-init.inc"
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/generate_ticket_http_path.py"
         "${STOPWATCH_PROJECT_ROOT}/patches/stopwatch-controlled-close" "${TICKET_PATH_DIR}"
     DEPENDS generate_ticket_http_path.py
@@ -220,7 +220,7 @@ add_custom_command(OUTPUT "${TICKET_PATH_DIR}/tls.inc" "${TICKET_PATH_DIR}/ssl.i
         "${STOPWATCH_PROJECT_ROOT}/patches/stopwatch-controlled-close/idf/candidate/components/esp_http_client/esp_http_client.c"
         "${STOPWATCH_PROJECT_ROOT}/patches/stopwatch-controlled-close/overlay/overlay-manifest-v03.json")
 add_executable(conversation_test_ticket_http_path test_ticket_http_path.c
-    "${TICKET_PATH_DIR}/tls.inc" "${TICKET_PATH_DIR}/ssl.inc" "${TICKET_PATH_DIR}/http.inc")
+    "${TICKET_PATH_DIR}/tls.inc" "${TICKET_PATH_DIR}/ssl.inc" "${TICKET_PATH_DIR}/http.inc" "${TICKET_PATH_DIR}/http-init.inc")
 target_include_directories(conversation_test_ticket_http_path PRIVATE "${TICKET_PATH_DIR}")
 target_link_libraries(conversation_test_ticket_http_path PRIVATE conversation_scope_host)
 target_compile_options(conversation_test_ticket_http_path PRIVATE -Wall -Wextra -Werror -Wno-unused-function)

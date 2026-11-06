@@ -40,4 +40,17 @@ for name in ('esp_tls_scope.c','esp_tls_scope.h'):
     raw=(sdk/'idf/candidate/components/esp-tls'/name).read_bytes();(out/name).write_bytes(raw)
     entry=next(e for e in manifest['files'] if e['kind']=='idf' and e['path']=='components/esp-tls/'+name)
     assert sha(raw)==entry['candidate_sha256'];records.append(dict(path='components/esp-tls/'+name,sha256=sha(raw),full_file=True))
+
+# URL setup can call close before any connection exists. Keep these exact
+# methods and the transport-default fragment in the initialization regression.
+http_text=(sdk/'idf/candidate/components/esp_http_client/esp_http_client.c').read_text()
+start=http_text.index('    if (config->transport_type == HTTP_TRANSPORT_OVER_SSL)',http_text.index('static esp_err_t _set_config'))
+end=http_text.index('    if (client->timeout_ms == 0)',start)
+branch=http_text[start:end]
+assert branch.count('DEFAULT_HTTPS_PORT')==1 and branch.count('DEFAULT_HTTP_PORT')==1
+content=extract(http_text,'esp_http_client_close')+'\n'+extract(http_text,'esp_http_client_set_url')+'\n'
+content+='static esp_err_t config_transport_defaults(esp_http_client_handle_t client,const esp_http_client_config_t*config){\n    esp_err_t ret=ESP_OK;\n    client->connection_info.port=config->port;\n'+branch+'    return ret;\nerror:return ret;\n}\n'
+(out/'http-init.inc').write_text(content,encoding='utf8')
+records.append(dict(path='components/esp_http_client/esp_http_client.c',methods=['esp_http_client_close','esp_http_client_set_url'],exact_fragment='_set_config transport defaults',generated_sha256=sha(content.encode()),parser_and_string_helpers_mocked=True,full_http_init_not_executed=True))
+
 (out/'source-verification.json').write_text(json.dumps(records,indent=2)+'\n')
